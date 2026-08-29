@@ -155,6 +155,29 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
     OpenAPI-subset şeması `enum` destekliyor) tutarlılık artar — ama bu,
     kullanıcının serbestçe yeni kategori açma esnekliğini kısıtlar, bir ürün
     kararı gerektirir.
+12. **Bot'un kendi gönderdiği (özellikle "❓ Netleştirilmesi gerekenler")
+    mesajlarını otomatik temizleme** — kullanıcı isteği: eski/işi biten
+    netleştirme mesajlarının sohbette birikmesini istemiyor. Telegram'ın
+    `deleteMessage` metodu bunu teknik olarak destekliyor ama iki sert kısıtı
+    var:
+    - **48 saat sınırı**: Bot API üzerinden bir mesaj ancak gönderildikten
+      sonraki 48 saat içinde silinebilir — daha eski mesajlar hiçbir kodla
+      silinemez (Telegram platform kısıtı, aşılamaz). Yani "son 5 günü
+      temizle" gibi bir istek literal olarak karşılanamaz; kapsam en fazla
+      "son 48 saat" olabilir.
+    - **Geçmişe dönük arama yok**: Telegram bot'lara "kendi gönderdiğim
+      mesajları listele" diye bir API vermiyor; `sendTelegramMessage_`
+      şu an gönderdiği mesajın `message_id`'sini hiç saklamıyor. Bu yüzden
+      bu özellik ancak **ileriye dönük** çalışabilir: `sendTelegramMessage_`
+      (Main.js) Telegram'ın `sendMessage` yanıtından dönen `message_id`'yi
+      + gönderim zamanını + mesaj tipini (örn. "netlestirme" vs "harcama
+      onayı") bir yere (Script Properties ya da gizli bir Sheets sekmesi)
+      kaydetmeli; ardından bir `/temizle` komutu veya zamanlı bir tetikleyici
+      bu kayıtları tarayıp 48 saatten yeni ve tipi "netlestirme" olanları
+      `deleteMessage` ile silmeli. Şu ana kadar test sırasında gönderilmiş
+      mesajlar için (geriye dönük, `message_id` kaydı olmadığı ve muhtemelen
+      48 saati de geçmiş olduğu için) kod tarafından yapılacak bir şey yok —
+      kullanıcı Telegram istemcisinde elle silebilir.
 
 ## Sonraki oturum için açık sorular
 - Gerçek spreadsheet'in başlık/sütun düzeni `SHEET_LAYOUT` varsayımıyla
