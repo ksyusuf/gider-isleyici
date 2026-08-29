@@ -19,3 +19,8 @@ venv/
 # Editor folders
 .vscode/
 .idea/
+
+# Google Apps Script (clasp) — scriptId ortam/deployment'a özeldir, sır değildir
+# ama commitlenmemesi gerekir. appsscript.json (proje manifesti) sır içermez,
+# clasp push için gereklidir ve bilerek repoda tutulur.
+.clasp.json
