@@ -231,28 +231,32 @@ function calistirFonksiyon_(functionCall) {
  */
 function islemSonuclariniBirlestir_(parts) {
   var fonksiyonSonuclari = [];
-  var netlestirmeMetinleri = [];
+  var metinParcalari = [];
 
   parts.forEach(function (part) {
     if (part.functionCall) {
       fonksiyonSonuclari.push(calistirFonksiyon_(part.functionCall));
     } else if (part.text && part.text.trim()) {
-      netlestirmeMetinleri.push(part.text.trim());
+      metinParcalari.push(part.text.trim());
     }
   });
 
-  var bloklar = [];
-  if (fonksiyonSonuclari.length > 0) {
-    bloklar.push(fonksiyonSonuclari.join("\n\n"));
-  }
-  if (netlestirmeMetinleri.length > 0) {
-    bloklar.push(
-      "❓ Netleştirilmesi gerekenler:\n" + netlestirmeMetinleri.join("\n"),
-    );
+  if (fonksiyonSonuclari.length === 0) {
+    // Hiç fonksiyon çağrısı yok: Gemini'nin metni bir selamlaşma, genel bir
+    // soru ya da netleştirme talebi olabilir — hepsi geçerli düz cevaplardır,
+    // "❓ Netleştirilmesi gerekenler" gibi harcamaya özgü bir etiketle
+    // sarmalamadan olduğu gibi iletilir.
+    return metinParcalari.length > 0
+      ? metinParcalari.join("\n\n")
+      : "Anlayamadım, tekrar dener misin?";
   }
 
-  if (bloklar.length === 0) {
-    return "Anlayamadım, tekrar dener misin?";
+  var bloklar = [fonksiyonSonuclari.join("\n\n")];
+  if (metinParcalari.length > 0) {
+    // Burada en az bir harcama başarıyla eklendi; kalan metin parçaları
+    // gerçekten "bu kalem için netleştirme gerekiyor" anlamına gelir (bkz.
+    // systemInstruction > ZORUNLU NETLİK KURALI, kısmi ekleme senaryosu).
+    bloklar.push("❓ Netleştirilmesi gerekenler:\n" + metinParcalari.join("\n"));
   }
 
   return bloklar.join("\n\n");
@@ -331,13 +335,31 @@ function respondOk_() {
 /**
  * Bu Web App deployment'ının URL'ini Telegram'a webhook olarak kaydeder.
  * Deploy ettikten sonra Apps Script editöründen bir kez elle çalıştırın.
+ *
+ * URL, Script Properties'teki WEBAPP_URL'den (CONFIG.webAppUrl) okunur.
+ * Kasıtlı olarak ScriptApp.getService().getUrl()'e otomatik düşülmüyor:
+ * o fonksiyon editörden elle ("Run" ile) çalıştırıldığında -yani gerçek bir
+ * web isteği bağlamı olmadan- güvenilir biçimde /exec değil /dev (test
+ * deployment) URL'ini döndürebiliyor, ve /dev URL'i anonim çağrılarda
+ * (Telegram dahil) 401 Unauthorized verir. Bu sessiz/yanlış URL riskini
+ * tamamen ortadan kaldırmak için WEBAPP_URL girilmemişse fonksiyon hata
+ * fırlatır.
+ *
+ * drop_pending_updates: true gönderiyoruz — webhook yanlış URL'e işaret
+ * ederken ya da kapalıyken biriken/bekleyen eski Telegram update'leri (örn.
+ * test amaçlı atılmış mesajlar) bu kayıt anında sessizce atılır. Aksi halde
+ * webhook doğru URL'e bağlanır bağlanmaz Telegram bu eski mesajları da
+ * sırayla teslim etmeye çalışabilir.
  * @return {string} Telegram API yanıtı.
  */
 function kurulumWebhook() {
-  var url = ScriptApp.getService().getUrl();
+  var url = CONFIG.webAppUrl;
   if (!url) {
     throw new Error(
-      "Web App URL'i alınamadı. Önce projeyi Deploy > New deployment > Web app ile deploy edin.",
+      "WEBAPP_URL Script Properties'te tanımlı değil. Önce projeyi Deploy > New " +
+        "deployment > Web app ile deploy edin, ardından Manage deployments " +
+        "ekranından kopyaladığınız /exec URL'ini Script Properties'e WEBAPP_URL " +
+        "olarak ekleyin.",
     );
   }
   var telegramUrl =
@@ -345,7 +367,7 @@ function kurulumWebhook() {
   var response = UrlFetchApp.fetch(telegramUrl, {
     method: "post",
     contentType: "application/json",
-    payload: JSON.stringify({ url: url }),
+    payload: JSON.stringify({ url: url, drop_pending_updates: true }),
     muteHttpExceptions: true,
   });
   Logger.log(response.getContentText());
@@ -353,7 +375,8 @@ function kurulumWebhook() {
 }
 
 /**
- * Telegram webhook kaydını kaldırır (test/temizlik amaçlı).
+ * Telegram webhook kaydını kaldırır (test/temizlik amaçlı). Bekleyen
+ * güncellemeleri de birlikte atar (drop_pending_updates: true).
  * @return {string} Telegram API yanıtı.
  */
 function webhookSil() {
@@ -361,6 +384,8 @@ function webhookSil() {
     "https://api.telegram.org/bot" + CONFIG.telegramToken + "/deleteWebhook";
   var response = UrlFetchApp.fetch(telegramUrl, {
     method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({ drop_pending_updates: true }),
     muteHttpExceptions: true,
   });
   Logger.log(response.getContentText());
