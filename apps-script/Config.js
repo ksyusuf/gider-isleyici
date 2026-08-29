@@ -30,6 +30,12 @@ const CONFIG = {
   ),
   // Boş bırakılırsa ilk sayfa (Sheets sekmesi) kullanılır.
   sheetName: PropertiesService.getScriptProperties().getProperty("SHEET_NAME"),
+  // Web App deployment'ının /exec URL'i. ScriptApp.getService().getUrl() editörden
+  // elle çalıştırıldığında (gerçek bir web isteği bağlamı olmadan) güvenilir biçimde
+  // /exec değil /dev (test deployment) URL'i döndürebiliyor; bu yüzden deploy sonrası
+  // gerçek /exec URL'i buraya Script Property olarak girilip kurulumWebhook() bu
+  // değeri önceliklendiriyor. Bkz. Main.js > kurulumWebhook().
+  webAppUrl: PropertiesService.getScriptProperties().getProperty("WEBAPP_URL"),
 };
 
 /** Saat dilimi: tarih biçimlendirme ve göreceli tarih hesapları için sabit. */

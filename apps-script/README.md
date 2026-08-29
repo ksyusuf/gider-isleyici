@@ -10,14 +10,15 @@ projesinin bağlı olduğu Google Sheets tablosuna doğrudan yazılır.
 Apps Script editöründe **Project Settings → Script Properties** kısmından
 ekleyin:
 
-| Anahtar | Zorunlu | Açıklama |
-|---|---|---|
-| `GEMINI_API_KEY` | ✅ | Google AI Studio / Gemini API anahtarı |
-| `TELEGRAM_TOKEN` | ✅ | BotFather'dan alınan bot token'ı |
-| `CHAT_ID` | önerilir | Botu kullanacak kişinin Telegram chat id'si. Boş bırakılırsa **herkes** webhook URL'ine mesaj gönderip botu kullanabilir |
-| `TEST_MODE` | opsiyonel | `"true"` verilirse prod tablo yerine `TEST_SPREADSHEET_ID` kullanılır |
-| `TEST_SPREADSHEET_ID` | `TEST_MODE=true` iken zorunlu | Test/kopya spreadsheet ID'si |
-| `SHEET_NAME` | opsiyonel | Belirli bir sayfa (tab) adı; boşsa spreadsheet'teki ilk sayfa kullanılır |
+| Anahtar               | Zorunlu                       | Açıklama                                                                                                                                                |
+| --------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GEMINI_API_KEY`      | ✅                            | Google AI Studio / Gemini API anahtarı                                                                                                                  |
+| `TELEGRAM_TOKEN`      | ✅                            | BotFather'dan alınan bot token'ı                                                                                                                        |
+| `CHAT_ID`             | önerilir                      | Botu kullanacak kişinin Telegram chat id'si. Boş bırakılırsa **herkes** webhook URL'ine mesaj gönderip botu kullanabilir                                |
+| `TEST_MODE`           | opsiyonel                     | `"true"` verilirse prod tablo yerine `TEST_SPREADSHEET_ID` kullanılır                                                                                   |
+| `TEST_SPREADSHEET_ID` | `TEST_MODE=true` iken zorunlu | Test/kopya spreadsheet ID'si                                                                                                                            |
+| `SHEET_NAME`          | opsiyonel                     | Belirli bir sayfa (tab) adı; boşsa spreadsheet'teki ilk sayfa kullanılır                                                                                |
+| `WEBAPP_URL`          | önerilir                      | Deploy sonrası **Manage deployments**'tan kopyaladığınız `/exec` URL'i. `kurulumWebhook()`'un doğru URL'i kullanmasını garantiler (bkz. Kurulum adım 4) |
 
 ## Kurulum
 
@@ -44,11 +45,11 @@ ekleyin:
 Kod, sorumluluklarına göre 3 dosyaya ayrılmıştır (Apps Script'te tüm proje
 dosyaları aynı global scope'u paylaşır, dosya sırası önemli değildir):
 
-| Dosya | İçerik |
-|---|---|
-| `Config.js` | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini function declarations) |
-| `Expenses.js` | Sheets D:I yazma/okuma/sıralama yardımcıları + `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla` |
-| `Main.js` | `FUNCTION_MAP`, Gemini REST entegrasyonu, Telegram entegrasyonu, `doPost` giriş noktası, `kurulumWebhook`/`webhookSil` |
+| Dosya         | İçerik                                                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `Config.js`   | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini function declarations)                                          |
+| `Expenses.js` | Sheets D:I yazma/okuma/sıralama yardımcıları + `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla`           |
+| `Main.js`     | `FUNCTION_MAP`, Gemini REST entegrasyonu, Telegram entegrasyonu, `doPost` giriş noktası, `kurulumWebhook`/`webhookSil` |
 
 ## Sheets sütun sözleşmesi
 
@@ -65,3 +66,15 @@ güncellemeniz yeterlidir.
 ID'sini `TEST_SPREADSHEET_ID`'ye, `TEST_MODE`'u `"true"`'ya ayarlarsanız bot
 gerçek tabloya hiç dokunmadan çalışır. Prod'a almadan önce `TEST_MODE`'u
 kaldırmayı (veya `"false"` yapmayı) unutmayın.
+
+## clasp.json
+
+{
+"scriptId": "SCRIPT_ID",
+"rootDir": "",
+"scriptExtensions": [".js", ".gs"],
+"htmlExtensions": [".html"],
+"jsonExtensions": [".json"],
+"filePushOrder": [],
+"skipSubdirectories": false
+}
