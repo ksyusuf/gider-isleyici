@@ -365,31 +365,43 @@ function islemSonuclariniBirlestir_(parts) {
   return bloklar.join("\n\n");
 }
 
-/** update_id işaretinin cache'te tutulma süresi (sn) — Telegram'ın retry penceresini rahatça kapsar. */
-const UPDATE_CACHE_TTL_SECONDS = 600;
+/** İşlenmiş en yüksek update_id'nin saklandığı Script Property anahtarı. */
+const SON_UPDATE_ID_KEY = "SON_UPDATE_ID";
 
-/** Cache oku/yaz kritik bölümü için kilit bekleme süresi (ms). */
+/** Oku/karşılaştır/yaz kritik bölümü için kilit bekleme süresi (ms). */
 const UPDATE_LOCK_TIMEOUT_MS = 10000;
 
 /**
- * Bu update daha önce işlendi mi? Telegram, webhook isteğine 2XX dışı bir yanıt
- * aldığında ya da yanıt yeterince hızlı dönmediğinde aynı update'i üstel geri
- * çekilmeyle (~1sn, 2sn, 4sn...) yeniden gönderir. Korunmazsa her tekrarda
- * Gemini yeniden çağrılır, aynı harcama tabloya birden fazla kez yazılır ve
- * kullanıcıya aynı cevap defalarca gider.
+ * Bu update daha önce işlendi mi? `respondOk_()` düzeltmesinden sonra Telegram
+ * teslimatı başarılı saydığı için normal şartlarda hiç tekrar gelmemeli; bu
+ * fonksiyon bir SAVUNMA KATMANI olarak duruyor (ağ kesintisi, gerçek timeout,
+ * elle yeniden gönderim). Korunmazsa her tekrarda Gemini yeniden çağrılır, aynı
+ * harcama tabloya birden fazla kez yazılır ve aynı cevap defalarca gider.
  *
  * Anahtar, update'in içeriği değil Telegram'ın her update'e verdiği artan ve
  * benzersiz `update_id`'sidir. Mesaj metnini saklamak yanlış olurdu: kullanıcı
  * aynı metni bilerek iki kez yazarsa ikincisi yutulurdu.
  *
+ * `update_id` KESİN OLARAK ARTAN olduğu için her update'e ayrı bir anahtar
+ * tutmak gereksiz: işlenmiş en yüksek id'yi saklayıp gelen id'yi onunla
+ * karşılaştırmak yeterli. Tek property, O(1), büyümez, temizlik istemez.
+ *
+ * ⚠️ Neden `CacheService` DEĞİL: önceki sürüm işareti cache'te 600 sn tutuyordu.
+ * Telegram başarısız saydığı teslimatı SAATLERCE yeniden dener; işaretin süresi
+ * her dolduğunda bir retry içeri sızıp aynı harcamayı tekrar kaydediyordu
+ * (~11 dakikada bir). Ayrıca CacheService bir cache'tir — süresi dolmadan da
+ * tahliye edilebilir. PropertiesService kalıcıdır, bu deliği tamamen kapatır.
+ *
+ * ⚠️ Bot token'ı değişirse `update_id` sayacı sıfırlanır; bu durumda Script
+ * Properties'ten `SON_UPDATE_ID` ELLE SİLİNMELİ, aksi halde yeni botun tüm
+ * mesajları "eski" sayılıp atlanır.
+ *
  * İki tasarım kararı kritik:
  *   - İşaret işin BAŞINDA atılır, sonunda değil. Tekrar teslim, ilk execution hâlâ
  *     çalışırken gelebiliyor; sonda işaretlense ikisi de işi yapardı.
- *   - Kilit yalnızca "oku + yaz" kritik bölümünü sarar (milisaniyeler), Gemini
- *     çağrısını DEĞİL — aksi halde tüm istekler seri hale gelirdi.
- *
- * CacheService script kapsamlıdır; anonim Web App execution'ları arasında da
- * paylaşılır ve TTL ile kendi kendini temizler (getUserCache burada işe yaramazdı).
+ *   - Kilit yalnızca "oku + karşılaştır + yaz" kritik bölümünü sarar
+ *     (milisaniyeler), Gemini çağrısını DEĞİL — aksi halde tüm istekler seri
+ *     hale gelirdi.
  *
  * @param {number|undefined} updateId Telegram update.update_id
  * @return {boolean} true ise bu update ilk kez görülüyor ve işlenmeli.
@@ -412,13 +424,18 @@ function isYeniUpdate_(updateId) {
   }
 
   try {
-    var cache = CacheService.getScriptCache();
-    var key = "upd_" + updateId;
-    if (cache.get(key)) {
-      log_("dedup.tekrar", "Bu update daha önce işaretlenmiş: " + updateId);
+    var props = PropertiesService.getScriptProperties();
+    var sonIsaret = Number(props.getProperty(SON_UPDATE_ID_KEY));
+
+    if (isFinite(sonIsaret) && sonIsaret > 0 && updateId <= sonIsaret) {
+      log_(
+        "dedup.tekrar",
+        "Bu update zaten işlenmiş: " + updateId + " <= " + sonIsaret,
+      );
       return false;
     }
-    cache.put(key, "1", UPDATE_CACHE_TTL_SECONDS);
+
+    props.setProperty(SON_UPDATE_ID_KEY, String(updateId));
     log_("dedup.yeni", "İlk kez görülüyor, işaretlendi: " + updateId);
     return true;
   } finally {
@@ -523,13 +540,25 @@ function doPost(e) {
 
 /**
  * Telegram'ın retry/backoff mekanizmasına girmemesi için doPost her koşulda
- * 200 döner.
- * @return {GoogleAppsScript.Content.TextOutput}
+ * 2XX döner.
+ *
+ * ⚠️ BURADA `ContentService` KULLANILMAZ — "daha doğru" görünse bile geri
+ * değiştirmeyin. Apps Script Web App'e gelen POST önce bir Google front-end
+ * sunucusuna düşer; `ContentService` çıktısında bu sunucu `302 Found` +
+ * `Location` başlığıyla asıl çalışma adresine (script.googleusercontent.com)
+ * yönlendirir. Telegram doğrudan 2XX bekler ve redirect'i TAKİP ETMEZ; 302'yi
+ * başarısız teslimat sayıp aynı update'i saatlerce yeniden gönderir.
+ *
+ * Bu, gerçek bir vakada tek bir harcamanın ~11 dakikada bir tekrar tekrar
+ * kaydedilmesine yol açtı (bkz. apps-script/CLAUDE.md > "Telegram'ın tekrar
+ * denemesi"). `HtmlService` bu yönlendirmeyi üretmez ve doğrudan 2XX döner.
+ *
+ * Doğrulama: `webhookDurumu()` çıktısında `last_error_message` OLMAMALI ve
+ * `pending_update_count` 0 olmalı.
+ * @return {GoogleAppsScript.HTML.HtmlOutput}
  */
 function respondOk_() {
-  return ContentService.createTextOutput(
-    JSON.stringify({ status: "ok" }),
-  ).setMimeType(ContentService.MimeType.JSON);
+  return HtmlService.createHtmlOutput("OK");
 }
 
 // ============================================================================
