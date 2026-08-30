@@ -40,6 +40,51 @@ ekleyin:
 5. Botu Telegram'dan test edin. Webhook'u kaldırmak isterseniz `webhookSil`
    fonksiyonunu çalıştırın.
 
+## Sorun giderme — `webhookDurumu()`
+
+Bot **aynı cevabı tekrar tekrar gönderiyorsa** ya da **hiç cevap vermiyorsa**,
+ilk bakılacak yer editörden elle çalıştırılan `webhookDurumu()` fonksiyonudur.
+Telegram'ın `getWebhookInfo` çıktısını loglar; önemli alanlar:
+
+| Alan                   | Ne anlama gelir                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `url`                  | Webhook'un bağlı olduğu adres. Boşsa webhook kurulu değil; `/dev` ile bitiyorsa yanlış (anonim çağrılarda 401 verir) |
+| `pending_update_count` | Teslim edilememiş, kuyrukta bekleyen update sayısı. Sıfırdan büyükse teslimat tıkanmış demektir                     |
+| `last_error_message`   | Telegram'ın teslimatı neden başarısız saydığı — yanıt zaman aşımı mı, 2XX olmayan bir yanıt mı                      |
+
+### Tekrar eden mesajlar
+
+Telegram, webhook isteğine 2XX dışı bir yanıt aldığında ya da yanıt yeterince
+hızlı dönmediğinde **aynı update'i üstel geri çekilmeyle yeniden gönderir**
+(~1sn, 2sn, 4sn...). Bot kendi mesajlarını asla geri almaz — tekrar eden
+mesajların sebebi her zaman budur, bir yankı döngüsü değil.
+
+`doPost` buna karşı `update_id` bazlı dedup uygular (`isYeniUpdate_`,
+`Main.js`): her update'in id'si işlemin **başında** `CacheService`'e 10
+dakikalık bir işaretle yazılır, tekrar teslimler hiçbir iş yapılmadan anında
+200 alır. Yani Telegram kaç kez tekrar gönderirse göndersin bir mesaj **en
+fazla bir kez** işlenir: tek cevap, tabloda tek satır.
+
+Doğru çalıştığını Apps Script **Executions** listesinden görebilirsiniz: tekrar
+gelirse birden fazla `doPost` görünür ama yalnızca **biri uzun** (birkaç
+saniye), diğerleri ~1 sn'de biter.
+
+### Logları göremiyorum
+
+Apps Script, **anonim çağıranlar** tarafından tetiklenen Web App
+execution'larının Cloud günlüklerini, projeye standart bir GCP projesi
+bağlanmadıkça sahibine göstermez. Telegram anonim bir çağıran olduğu için
+Executions listesinde `doPost` satırları **görünür ama açılıp log okunamaz** —
+`Execute as: Me` olması bunu değiştirmez.
+
+Logları görmek için Project Settings → **Google Cloud Platform (GCP) Project**
+kısmından standart bir GCP projesi bağlayın; ardından loglar Cloud Logging'de
+(Logs Explorer) tam olarak görünür.
+
+Bu yapılmadan da doğrulanabilecek iki şey var ve bunlar her zaman görünür:
+execution **sayısı** ve **süreleri**, bir de **durum sütunu** (Tamamlandı /
+Başarısız). Cevapsız kalan bir mesajda durum sütunu tek başına çok şey söyler.
+
 ## Dosya yapısı
 
 Kod, sorumluluklarına göre 3 dosyaya ayrılmıştır (Apps Script'te tüm proje
@@ -49,7 +94,7 @@ dosyaları aynı global scope'u paylaşır, dosya sırası önemli değildir):
 | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `Config.js`   | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini function declarations)                                          |
 | `Expenses.js` | Sheets D:I yazma/okuma/sıralama yardımcıları + `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla`           |
-| `Main.js`     | `FUNCTION_MAP`, Gemini REST entegrasyonu, Telegram entegrasyonu, `doPost` giriş noktası, `kurulumWebhook`/`webhookSil` |
+| `Main.js`     | `FUNCTION_MAP`, Gemini REST entegrasyonu, Telegram entegrasyonu, `update_id` dedup (`isYeniUpdate_`), `doPost` giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil` |
 
 ## Sheets sütun sözleşmesi
 
