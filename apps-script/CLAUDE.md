@@ -107,6 +107,78 @@ tekrar eden mesajlar tamamen kesildi.
 - **Config dosyasının adı `.clasp.json`** (baştaki nokta şart). `clasp.json`
   olarak duruyordu ve `clasp push` "Project settings not found" veriyordu.
 
+### İkinci raunt: kök sebep 302 redirect'miş (2026-08-30)
+
+Dedup arka arkaya gelen tekrarları durdurdu ama tek bir harcama **~11 dakikada
+bir** yeniden kaydedilmeye devam etti (16:38 → 16:49 → 17:00 → 17:11 → 17:22).
+
+**Aritmetiği:** dedup işareti `CacheService`'te 600 sn duruyordu. Executions
+logu adım adım gösteriyor: 16:38:00'de ilk işleme (5.383 sn) işareti koyuyor;
+16:38–16:47 arası 11 retry dedup'a takılıyor (0.88–2.1 sn); işaret 16:48:00'de
+doluyor ve 16:48:52'deki retry "yeni" sayılıp ikinci kaydı yazıyor (6.348 sn).
+Her döngüde işaret 10 dk daha tazeleniyor. Telegram ise başarısız saydığı
+teslimatı **saatlerce** yeniden dener — yani TTL retry penceresinden kısaydı.
+
+**Ama asıl bulgu şu:** dedup'a takılan execution'lar **0.9 saniyede** 2XX
+dönüyordu ve Telegram yine de tekrar deniyordu. Bu, ilk raunttan kalan "yanıt
+çok yavaş" hipotezini kesin olarak eledi: Telegram yanıtı alıyor ama **kabul
+etmiyordu**.
+
+**Kök sebep:** `respondOk_()` içindeki `ContentService.createTextOutput()`.
+Apps Script Web App'e gelen POST önce bir Google front-end sunucusuna düşer;
+`ContentService` çıktısında bu sunucu `302 Found` + `Location` ile
+`script.googleusercontent.com`'a yönlendirir. Telegram doğrudan 2XX bekler ve
+**redirect'i takip etmez** → başarısız teslimat → saatlerce retry.
+
+**Uygulanan düzeltme:**
+
+- `respondOk_()` artık `HtmlService.createHtmlOutput("OK")` döndürüyor.
+  **`ContentService`'e geri dönülmemeli** — fonksiyonun başındaki uyarı bunu
+  anlatıyor.
+- `isYeniUpdate_` savunma katmanı olarak kaldı ama `CacheService` yerine
+  `PropertiesService`'te süresi dolmayan tek bir sayı (`SON_UPDATE_ID`)
+  tutuyor. `update_id` kesin artan olduğu için anahtar kümesi gereksiz:
+  gelen id saklanan işaretten büyük değilse atlanır. TTL deliği tamamen kapandı;
+  CacheService'in "süresi dolmadan da tahliye edilebilir" riski de ortadan
+  kalktı.
+
+**Doğrulama sinyali:** `webhookDurumu()` çıktısında `last_error_message`
+OLMAMALI ve `pending_update_count` 0 olmalı.
+
+**⚠️ Bakım notu:** bot token'ı değişirse `update_id` sayacı sıfırlanır; Script
+Properties'ten `SON_UPDATE_ID` elle silinmeli, aksi halde yeni botun tüm
+mesajları "eski" sayılıp atlanır.
+
+### Plan B — webhook yerine polling (İSTENMEDİ, ileride başvurulabilir)
+
+Kullanıcı bunu **şimdilik istemedi**; ileride benzer bir teslimat sorunu
+çıkarsa değerlendirmek üzere not edildi. Yani `HtmlService` düzeltmesi bir
+şekilde yetmezse ya da Apps Script tarafında yanıt davranışı yine değişirse
+başvurulacak mimari alternatif budur.
+
+`setWebhook` tamamen kaldırılır (`webhookSil()`), yerine zamanlı bir tetikleyici
+(`ScriptApp.newTrigger(...).timeBased().everyMinutes(n)`) `getUpdates` çağırır.
+
+Neden sorunu kökten bitirir: webhook'ta teslimatı Telegram'ın "yanıtı beğenip
+beğenmemesi" belirler. Polling'de böyle bir şey yoktur — **Telegram'ın kendi
+`offset` mekanizması** onaylama görevini üstlenir: `getUpdates` bir sonraki
+turda `offset = son_update_id + 1` ile çağrılınca eski update'ler sunucu
+tarafında kapanır ve bir daha dönmez. Yani retry kavramı da, özel dedup
+ihtiyacı da (`isYeniUpdate_` dahil) tamamen ortadan kalkar.
+
+Bedeli:
+
+- **Gecikme:** Apps Script zamanlı tetikleyicilerinin tabanı ~1 dakika; mesaj
+  anında değil, en fazla o kadar sonra işlenir.
+- **Kota:** bot hiç kullanılmasa bile tetikleyici sürekli çalışır ve günlük
+  Apps Script çalışma süresi kotasını yer. Sık aralıklarda (1 dk) bu ciddi bir
+  tüketim; 5 dk daha güvenli ama daha laggy.
+- `getUpdates` ile `setWebhook` **birbirini dışlar** — webhook kuruluyken
+  `getUpdates` çalışmaz, önce `webhookSil()` gerekir.
+
+Referans: [Telegram Bot API](https://core.telegram.org/bots/api),
+[GramIO getUpdates](https://gramio.dev/telegram/methods/getupdates).
+
 **Henüz yapılmadı / açık:**
 - O 4 execution prod tabloya mükerrer satır yazmış olabilir. `❓ Netleştirilmesi
   gerekenler` başlığı (bkz. `islemSonuclariniBirlestir_`) yalnızca en az bir

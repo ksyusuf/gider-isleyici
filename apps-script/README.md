@@ -54,20 +54,30 @@ Telegram'ın `getWebhookInfo` çıktısını loglar; önemli alanlar:
 
 ### Tekrar eden mesajlar
 
-Telegram, webhook isteğine 2XX dışı bir yanıt aldığında ya da yanıt yeterince
-hızlı dönmediğinde **aynı update'i üstel geri çekilmeyle yeniden gönderir**
-(~1sn, 2sn, 4sn...). Bot kendi mesajlarını asla geri almaz — tekrar eden
-mesajların sebebi her zaman budur, bir yankı döngüsü değil.
+Telegram, webhook isteğine 2XX dışı bir yanıt aldığında **aynı update'i üstel
+geri çekilmeyle saatlerce yeniden gönderir**. Bot kendi mesajlarını asla geri
+almaz — tekrar eden mesajların sebebi her zaman budur, bir yankı döngüsü değil.
 
-`doPost` buna karşı `update_id` bazlı dedup uygular (`isYeniUpdate_`,
-`Main.js`): her update'in id'si işlemin **başında** `CacheService`'e 10
-dakikalık bir işaretle yazılır, tekrar teslimler hiçbir iş yapılmadan anında
-200 alır. Yani Telegram kaç kez tekrar gönderirse göndersin bir mesaj **en
-fazla bir kez** işlenir: tek cevap, tabloda tek satır.
+**Kök sebep ve düzeltmesi:** Apps Script Web App'e gelen POST önce bir Google
+front-end sunucusuna düşer ve `ContentService` çıktısında bu sunucu `302 Found`
+ile yönlendirme yapar. Telegram doğrudan 2XX bekler, redirect'i takip etmez ve
+teslimatı başarısız sayar. Bu yüzden `respondOk_()` **`HtmlService.
+createHtmlOutput()`** kullanır — `ContentService`'e geri dönülmemelidir.
 
-Doğru çalıştığını Apps Script **Executions** listesinden görebilirsiniz: tekrar
-gelirse birden fazla `doPost` görünür ama yalnızca **biri uzun** (birkaç
-saniye), diğerleri ~1 sn'de biter.
+**Savunma katmanı:** `doPost` ayrıca `update_id` bazlı dedup uygular
+(`isYeniUpdate_`, `Main.js`): işlenmiş en yüksek `update_id`, işlemin
+**başında** Script Properties'e (`SON_UPDATE_ID`) yazılır. `update_id` kesin
+artan olduğu için gelen id bu işaretten büyük değilse update sessizce atlanır.
+Süresi dolmaz, büyümez. Yani bir mesaj **en fazla bir kez** işlenir: tek cevap,
+tabloda tek satır.
+
+> ⚠️ Bot token'ı değişirse `update_id` sayacı sıfırlanır. Script
+> Properties'ten `SON_UPDATE_ID`'yi **elle silin**, aksi halde yeni botun tüm
+> mesajları "eski" sayılıp atlanır.
+
+Doğru çalıştığının kanıtı `webhookDurumu()` çıktısıdır: `last_error_message`
+**olmamalı**, `pending_update_count` **0** olmalı. Executions listesinde de bir
+mesaj için tek bir `doPost` görünmelidir.
 
 ### Logları göremiyorum
 
