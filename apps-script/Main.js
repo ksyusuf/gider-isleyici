@@ -12,9 +12,10 @@
  *
  * Bölümler:
  *   1. FUNCTION_MAP — Gemini fonksiyon adı → gerçek implementasyon eşlemesi
- *   2. Gemini REST entegrasyonu
- *   3. Telegram entegrasyonu (doPost)
- *   4. Geliştirici yardımcı fonksiyonları (webhook kurulum/kaldırma)
+ *   2. Loglama (log_ / logHata_)
+ *   3. Gemini REST entegrasyonu
+ *   4. Telegram entegrasyonu (update dedup + doPost)
+ *   5. Geliştirici yardımcı fonksiyonları (webhook kurulum/durum/kaldırma)
  */
 
 // ============================================================================
@@ -29,7 +30,60 @@ const FUNCTION_MAP = {
 };
 
 // ============================================================================
-// 2. Gemini REST entegrasyonu
+// 2. Loglama
+// ============================================================================
+
+/** Tek bir log satırının en fazla kaç karakter basılacağı. */
+const LOG_MAX_UZUNLUK = 1500;
+
+/**
+ * Cloud günlüklerinde greplenebilir tek biçimli log satırı: `[etiket] gövde`.
+ *
+ * Anonim Web App execution'larında bile Apps Script > Executions altında
+ * görünür. Uzun gövdeler kısaltılır ki tek bir devasa satır logu boğmasın.
+ *
+ * GÜVENLİK: Sır asla loglanmaz. Özellikle Gemini istek URL'i API key içerdiği
+ * için hiçbir zaman basılmaz; Telegram URL'i de bot token içerir.
+ *
+ * @param {string} etiket Nokta ile ayrılmış kısa yol, ör. "doPost.mesaj".
+ * @param {*} [veri] Metin ya da JSON'a çevrilebilir herhangi bir değer.
+ */
+function log_(etiket, veri) {
+  var govde = "";
+  if (veri !== undefined) {
+    try {
+      govde = typeof veri === "string" ? veri : JSON.stringify(veri);
+    } catch (err) {
+      govde = "<serileştirilemedi: " + err.message + ">";
+    }
+    if (govde === undefined || govde === null) {
+      govde = String(veri);
+    }
+    if (govde.length > LOG_MAX_UZUNLUK) {
+      govde =
+        govde.slice(0, LOG_MAX_UZUNLUK) +
+        "... [kısaltıldı, toplam " +
+        govde.length +
+        " karakter]";
+    }
+  }
+
+  console.log(govde ? "[" + etiket + "] " + govde : "[" + etiket + "]");
+}
+
+/**
+ * Hatayı stack trace'iyle birlikte basar. `console.error(err)` tek başına
+ * Cloud günlüklerinde çoğu zaman sadece "[object Object]" gösteriyor.
+ * @param {string} etiket
+ * @param {*} err
+ */
+function logHata_(etiket, err) {
+  var detay = err && err.stack ? err.stack : String(err);
+  console.error("[" + etiket + "] " + detay);
+}
+
+// ============================================================================
+// 3. Gemini REST entegrasyonu
 // ============================================================================
 
 /**
@@ -146,36 +200,61 @@ function callGemini_(userText, mesajZamaniSaniye) {
     },
   };
 
+  // NOT: `url` API key içeriyor — asla loglanmaz.
+  log_("gemini.istek", {
+    model: CONFIG.geminiModel,
+    mesajZamani: Utilities.formatDate(
+      mesajZamani,
+      TIME_ZONE,
+      "yyyy-MM-dd HH:mm:ss",
+    ),
+    metin: userText,
+  });
+
+  var t0 = Date.now();
   var response = UrlFetchApp.fetch(url, {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify(requestBody),
     muteHttpExceptions: true,
   });
+  var sureMs = Date.now() - t0;
 
   var statusCode = response.getResponseCode();
+  var govde = response.getContentText();
+  log_("gemini.yanit", { http: statusCode, sureMs: sureMs, govde: govde });
+
   if (statusCode !== 200) {
-    throw new Error(
-      "Gemini API hatası (HTTP " +
-        statusCode +
-        "): " +
-        response.getContentText(),
-    );
+    throw new Error("Gemini API hatası (HTTP " + statusCode + "): " + govde);
   }
 
-  var json = JSON.parse(response.getContentText());
+  var json = JSON.parse(govde);
   var candidate = json.candidates && json.candidates[0];
   if (!candidate || !candidate.content || !candidate.content.parts) {
-    throw new Error(
-      "Gemini API beklenmeyen bir yanıt döndürdü: " + response.getContentText(),
-    );
+    // Güvenlik filtresi ya da boş yanıt burada yakalanır; promptFeedback
+    // genellikle sebebi söyler.
+    log_("gemini.bos-yanit", {
+      promptFeedback: json.promptFeedback,
+      candidates: json.candidates,
+    });
+    throw new Error("Gemini API beklenmeyen bir yanıt döndürdü: " + govde);
   }
+
+  log_("gemini.finishReason", candidate.finishReason);
+  log_(
+    "gemini.parts",
+    candidate.content.parts.map(function (part) {
+      return part.functionCall
+        ? { fonksiyon: part.functionCall.name, args: part.functionCall.args }
+        : { text: part.text };
+    }),
+  );
 
   return candidate.content.parts;
 }
 
 // ============================================================================
-// 3. Telegram entegrasyonu
+// 4. Telegram entegrasyonu
 // ============================================================================
 
 /**
@@ -184,21 +263,25 @@ function callGemini_(userText, mesajZamaniSaniye) {
  * @param {string} text
  */
 function sendTelegramMessage_(chatId, text) {
+  // NOT: `url` bot token içeriyor — asla loglanmaz.
   var url =
     "https://api.telegram.org/bot" + CONFIG.telegramToken + "/sendMessage";
+  log_("telegram.gonder", { chatId: chatId, uzunluk: (text || "").length });
+
   var response = UrlFetchApp.fetch(url, {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify({ chat_id: chatId, text: text }),
     muteHttpExceptions: true,
   });
+
   var statusCode = response.getResponseCode();
+  var govde = response.getContentText();
+  log_("telegram.yanit", { http: statusCode, govde: govde });
+
   if (statusCode !== 200) {
     console.error(
-      "Telegram sendMessage hatası (HTTP " +
-        statusCode +
-        "): " +
-        response.getContentText(),
+      "[telegram.HATA] sendMessage başarısız (HTTP " + statusCode + "): " + govde,
     );
   }
 }
@@ -210,13 +293,28 @@ function sendTelegramMessage_(chatId, text) {
  * @return {string}
  */
 function calistirFonksiyon_(functionCall) {
+  log_("fonksiyon.cagri", {
+    ad: functionCall.name,
+    args: functionCall.args,
+  });
+
   var fn = FUNCTION_MAP[functionCall.name];
   if (!fn) {
+    log_("fonksiyon.bilinmeyen", functionCall.name);
     return "⚠️ Bilinmeyen fonksiyon çağrısı: " + functionCall.name;
   }
+
+  var t0 = Date.now();
   try {
-    return fn(functionCall.args || {});
+    var sonuc = fn(functionCall.args || {});
+    log_("fonksiyon.sonuc", {
+      ad: functionCall.name,
+      sureMs: Date.now() - t0,
+      sonuc: sonuc,
+    });
+    return sonuc;
   } catch (err) {
+    logHata_("fonksiyon.HATA:" + functionCall.name, err);
     return (
       "⚠️ '" + functionCall.name + "' işlenirken hata oluştu: " + err.message
     );
@@ -241,6 +339,11 @@ function islemSonuclariniBirlestir_(parts) {
     }
   });
 
+  log_("birlestir.ozet", {
+    fonksiyonSonucu: fonksiyonSonuclari.length,
+    metinParcasi: metinParcalari.length,
+  });
+
   if (fonksiyonSonuclari.length === 0) {
     // Hiç fonksiyon çağrısı yok: Gemini'nin metni bir selamlaşma, genel bir
     // soru ya da netleştirme talebi olabilir — hepsi geçerli düz cevaplardır,
@@ -262,32 +365,126 @@ function islemSonuclariniBirlestir_(parts) {
   return bloklar.join("\n\n");
 }
 
+/** update_id işaretinin cache'te tutulma süresi (sn) — Telegram'ın retry penceresini rahatça kapsar. */
+const UPDATE_CACHE_TTL_SECONDS = 600;
+
+/** Cache oku/yaz kritik bölümü için kilit bekleme süresi (ms). */
+const UPDATE_LOCK_TIMEOUT_MS = 10000;
+
+/**
+ * Bu update daha önce işlendi mi? Telegram, webhook isteğine 2XX dışı bir yanıt
+ * aldığında ya da yanıt yeterince hızlı dönmediğinde aynı update'i üstel geri
+ * çekilmeyle (~1sn, 2sn, 4sn...) yeniden gönderir. Korunmazsa her tekrarda
+ * Gemini yeniden çağrılır, aynı harcama tabloya birden fazla kez yazılır ve
+ * kullanıcıya aynı cevap defalarca gider.
+ *
+ * Anahtar, update'in içeriği değil Telegram'ın her update'e verdiği artan ve
+ * benzersiz `update_id`'sidir. Mesaj metnini saklamak yanlış olurdu: kullanıcı
+ * aynı metni bilerek iki kez yazarsa ikincisi yutulurdu.
+ *
+ * İki tasarım kararı kritik:
+ *   - İşaret işin BAŞINDA atılır, sonunda değil. Tekrar teslim, ilk execution hâlâ
+ *     çalışırken gelebiliyor; sonda işaretlense ikisi de işi yapardı.
+ *   - Kilit yalnızca "oku + yaz" kritik bölümünü sarar (milisaniyeler), Gemini
+ *     çağrısını DEĞİL — aksi halde tüm istekler seri hale gelirdi.
+ *
+ * CacheService script kapsamlıdır; anonim Web App execution'ları arasında da
+ * paylaşılır ve TTL ile kendi kendini temizler (getUserCache burada işe yaramazdı).
+ *
+ * @param {number|undefined} updateId Telegram update.update_id
+ * @return {boolean} true ise bu update ilk kez görülüyor ve işlenmeli.
+ */
+function isYeniUpdate_(updateId) {
+  if (updateId === undefined || updateId === null) {
+    // Beklenmedik payload: dedup asla meşru bir mesajı düşürmemeli.
+    log_("dedup.id-yok", "update_id gelmedi, update yine de işlenecek.");
+    return true;
+  }
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(UPDATE_LOCK_TIMEOUT_MS);
+  } catch (err) {
+    // Kilit alınamadı: başka bir execution aynı anda bu update'i işliyor olabilir.
+    // Tekrar üretmektense atlamak doğru.
+    logHata_("dedup.kilit-alinamadi:" + updateId, err);
+    return false;
+  }
+
+  try {
+    var cache = CacheService.getScriptCache();
+    var key = "upd_" + updateId;
+    if (cache.get(key)) {
+      log_("dedup.tekrar", "Bu update daha önce işaretlenmiş: " + updateId);
+      return false;
+    }
+    cache.put(key, "1", UPDATE_CACHE_TTL_SECONDS);
+    log_("dedup.yeni", "İlk kez görülüyor, işaretlendi: " + updateId);
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /**
  * Apps Script Web App POST giriş noktası — Telegram webhook'u buraya bağlanır.
  * @param {GoogleAppsScript.Events.DoPost} e
  * @return {GoogleAppsScript.Content.TextOutput}
  */
 function doPost(e) {
+  var baslangic = Date.now();
   var chatId = null;
   try {
+    if (!e || !e.postData || !e.postData.contents) {
+      // Web App URL'i herkese açık (ANYONE_ANONYMOUS). Telegram dışından gelen
+      // tarama/probe istekleri JSON.parse hatasına düşüp catch bloğu üzerinden
+      // kullanıcıya gereksiz hata mesajı göndermesin diye sessizce yok sayılır.
+      log_("doPost.gecersiz-istek", "postData yok — Telegram dışı istek, yok sayıldı.");
+      return respondOk_();
+    }
+
+    log_("doPost.ham-payload", e.postData.contents);
     var update = JSON.parse(e.postData.contents);
+
+    // Tekrar teslim edilen update'ler burada, hiçbir iş yapılmadan elenir.
+    if (!isYeniUpdate_(update.update_id)) {
+      log_("doPost.cikis", "tekrar-atlandi, update_id=" + update.update_id);
+      return respondOk_();
+    }
+
     var message = update.message;
 
     if (!message) {
       // edited_message, channel_post vb. desteklenmeyen güncelleme tipleri sessizce yok sayılır.
+      log_("doPost.cikis", {
+        sebep: "message-yok",
+        updateAnahtarlari: Object.keys(update),
+      });
       return respondOk_();
     }
 
     chatId = message.chat && message.chat.id;
     var text = message.text;
+    log_("doPost.mesaj", {
+      updateId: update.update_id,
+      chatId: chatId,
+      date: message.date,
+      text: text,
+    });
 
     // Güvenlik: CONFIG.chatId tanımlıysa sadece o sohbetten gelen mesajlar işlenir.
     // Web App URL'i herkese açık olduğu için bu, tek kullanıcılık bot için asgari korumadır.
     if (CONFIG.chatId && String(chatId) !== String(CONFIG.chatId)) {
+      log_("doPost.cikis", {
+        sebep: "yetkisiz-chat",
+        gelen: String(chatId),
+        beklenen: String(CONFIG.chatId),
+      });
       return respondOk_();
     }
 
     if (!text) {
+      log_("doPost.cikis", "metin-yok (foto/ses/sticker olabilir)");
       sendTelegramMessage_(
         chatId,
         "Şu an sadece yazılı mesajları anlayabiliyorum. 🙂",
@@ -297,22 +494,29 @@ function doPost(e) {
 
     var parts = callGemini_(text, message.date);
     var cevapMetni = islemSonuclariniBirlestir_(parts);
+    log_("doPost.cevap", cevapMetni);
     sendTelegramMessage_(chatId, cevapMetni);
+    log_("doPost.tamamlandi", { toplamSureMs: Date.now() - baslangic });
   } catch (err) {
-    console.error(err);
+    logHata_("doPost.HATA", err);
     var hedefChatId = chatId || CONFIG.chatId;
-    if (hedefChatId) {
+    if (!hedefChatId) {
+      // Kullanıcıya hiçbir şey gidemez — sessiz kalmanın tek meşru sebebi budur.
+      console.error(
+        "[doPost.HATA] Hedef chat id yok (ne mesajdan ne CONFIG.chatId'den); " +
+          "kullanıcıya hata mesajı gönderilemiyor.",
+      );
+    } else {
       try {
         sendTelegramMessage_(
           hedefChatId,
           "⚠️ Bir hata oluştu, işlem tamamlanamadı: " + err.message,
         );
       } catch (gonderimHatasi) {
-        console.error(
-          "Hata mesajı Telegram'a gönderilemedi: " + gonderimHatasi,
-        );
+        logHata_("doPost.hata-mesaji-gonderilemedi", gonderimHatasi);
       }
     }
+    log_("doPost.hatayla-bitti", { toplamSureMs: Date.now() - baslangic });
   }
   return respondOk_();
 }
@@ -329,7 +533,7 @@ function respondOk_() {
 }
 
 // ============================================================================
-// 4. Geliştirici yardımcı fonksiyonları (doPost'a bağlı değil, editörden elle çalıştırılır)
+// 5. Geliştirici yardımcı fonksiyonları (doPost'a bağlı değil, editörden elle çalıştırılır)
 // ============================================================================
 
 /**
@@ -350,6 +554,10 @@ function respondOk_() {
  * test amaçlı atılmış mesajlar) bu kayıt anında sessizce atılır. Aksi halde
  * webhook doğru URL'e bağlanır bağlanmaz Telegram bu eski mesajları da
  * sırayla teslim etmeye çalışabilir.
+ *
+ * allowed_updates: ["message"] gönderiyoruz — doPost zaten `message` dışındaki
+ * her update tipini yok saydığı için Telegram'ın onları hiç göndermemesi
+ * gereksiz execution'ı ve Apps Script kotasını azaltır.
  * @return {string} Telegram API yanıtı.
  */
 function kurulumWebhook() {
@@ -367,7 +575,33 @@ function kurulumWebhook() {
   var response = UrlFetchApp.fetch(telegramUrl, {
     method: "post",
     contentType: "application/json",
-    payload: JSON.stringify({ url: url, drop_pending_updates: true }),
+    payload: JSON.stringify({
+      url: url,
+      drop_pending_updates: true,
+      allowed_updates: ["message"],
+    }),
+    muteHttpExceptions: true,
+  });
+  Logger.log(response.getContentText());
+  return response.getContentText();
+}
+
+/**
+ * Telegram'ın webhook hakkında ne düşündüğünü döker (getWebhookInfo): kayıtlı
+ * URL, bekleyen update sayısı (`pending_update_count`), son hata tarihi ve son
+ * hata mesajı (`last_error_message`).
+ *
+ * Bot tekrar eden ya da hiç gelmeyen mesajlarla ilgili bir sorun gösterdiğinde
+ * İLK bakılacak yer burasıdır: `last_error_message`, Telegram'ın teslimatı neden
+ * başarısız saydığını (yanıt zaman aşımı mı, 2XX olmayan bir yanıt mı) doğrudan
+ * söyler. Apps Script'in Executions listesi tek başına bunu ayırt edemez.
+ * @return {string} Telegram API yanıtı.
+ */
+function webhookDurumu() {
+  var telegramUrl =
+    "https://api.telegram.org/bot" + CONFIG.telegramToken + "/getWebhookInfo";
+  var response = UrlFetchApp.fetch(telegramUrl, {
+    method: "get",
     muteHttpExceptions: true,
   });
   Logger.log(response.getContentText());

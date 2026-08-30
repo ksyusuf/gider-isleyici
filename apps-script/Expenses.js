@@ -28,9 +28,23 @@ function getTargetSpreadsheet_() {
         "TEST_MODE aktif ama Script Properties içinde TEST_SPREADSHEET_ID tanımlı değil.",
       );
     }
+    log_("sheets.hedef", { mod: "TEST", id: CONFIG.testSpreadsheetId });
     return SpreadsheetApp.openById(CONFIG.testSpreadsheetId);
   }
-  return SpreadsheetApp.getActiveSpreadsheet();
+
+  var aktif = SpreadsheetApp.getActiveSpreadsheet();
+  if (!aktif) {
+    // Script bir Google Sheets dosyasına bağlı (container-bound) değilse
+    // getActiveSpreadsheet() null döner. Aksi halde bir satır aşağıda
+    // anlaşılması zor bir "null.getSheetByName" TypeError'ı alınırdı.
+    throw new Error(
+      "Aktif spreadsheet bulunamadı: bu Apps Script projesi bir Google Sheets " +
+        "dosyasına bağlı değil (standalone). Script'i tablonun Uzantılar > Apps " +
+        "Script menüsünden açın ya da TEST_MODE=true + TEST_SPREADSHEET_ID kullanın.",
+    );
+  }
+  log_("sheets.hedef", { mod: "PROD", id: aktif.getId() });
+  return aktif;
 }
 
 /**
@@ -46,9 +60,12 @@ function getTargetSheet_(spreadsheet) {
         "'" + CONFIG.sheetName + "' adında bir sayfa bulunamadı.",
       );
     }
+    log_("sheets.sayfa", { kaynak: "SHEET_NAME", ad: sheet.getName() });
     return sheet;
   }
-  return spreadsheet.getSheets()[0];
+  var ilk = spreadsheet.getSheets()[0];
+  log_("sheets.sayfa", { kaynak: "ilk-sayfa", ad: ilk.getName() });
+  return ilk;
 }
 
 /**
@@ -68,9 +85,11 @@ function findNextDataRow_(sheet) {
     .getValues();
   for (var i = 0; i < values.length; i++) {
     if (values[i][0] === "" || values[i][0] === null) {
+      log_("sheets.hedefSatir", { satir: startRow + i, sebep: "ilk-bos-hucre" });
       return startRow + i;
     }
   }
+  log_("sheets.hedefSatir", { satir: lastRow + 1, sebep: "blok-sonu" });
   return lastRow + 1;
 }
 
@@ -206,6 +225,16 @@ function harcamaEkle(args) {
   var malzeme = args.malzeme ? harfBuyukYap_(args.malzeme) : "";
   var aciklama = harfBuyukYap_(args.aciklama || "");
 
+  log_("harcamaEkle.cozumlenen", {
+    tutar: tutar,
+    tur: tur,
+    tarih: Utilities.formatDate(tarihDate, TIME_ZONE, "yyyy-MM-dd"),
+    firma: firma,
+    malzeme: malzeme,
+    aciklama: aciklama,
+  });
+
+  var t0 = Date.now();
   var spreadsheet = getTargetSpreadsheet_();
   var sheet = getTargetSheet_(spreadsheet);
   var hedefSatir = findNextDataRow_(sheet);
@@ -213,9 +242,11 @@ function harcamaEkle(args) {
   sheet
     .getRange(hedefSatir, SHEET_LAYOUT.START_COL, 1, SHEET_LAYOUT.NUM_COLS)
     .setValues([[tarihDate, tutar, firma, tur, malzeme, aciklama]]);
+  log_("harcamaEkle.yazildi", { satir: hedefSatir });
 
   var sonSatir = Math.max(sheet.getLastRow(), hedefSatir);
   sortByDateDescending_(sheet, sonSatir);
+  log_("harcamaEkle.bitti", { sonSatir: sonSatir, sureMs: Date.now() - t0 });
 
   var tarihEtiketi = Utilities.formatDate(tarihDate, TIME_ZONE, "dd.MM.yyyy");
   var ozet =
@@ -238,6 +269,7 @@ function sonHarcamalariGetir(args) {
   var spreadsheet = getTargetSpreadsheet_();
   var sheet = getTargetSheet_(spreadsheet);
   var satirlar = readTopRows_(sheet, adet);
+  log_("sonHarcamalariGetir", { istenen: adet, okunan: satirlar.length });
 
   if (satirlar.length === 0) {
     return "Henüz kayıtlı harcama yok.";
@@ -270,6 +302,7 @@ function sonHarcamalariTopla(args) {
   var spreadsheet = getTargetSpreadsheet_();
   var sheet = getTargetSheet_(spreadsheet);
   var satirlar = readTopRows_(sheet, adet);
+  log_("sonHarcamalariTopla", { istenen: adet, okunan: satirlar.length });
 
   if (satirlar.length === 0) {
     return "Henüz kayıtlı harcama yok.";

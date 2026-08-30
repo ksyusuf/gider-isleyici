@@ -1,5 +1,32 @@
 # gider-isleyici — Proje Notları (Claude için)
 
+## Çalışma kuralları (ÖNCELİKLİ — diğer her şeyden önce oku)
+
+### 1. Kapsam genişletme = önce sor
+
+İstenen işin sınırı neyse o kadarını yap. Sorunu çözmek için **yeni bir
+mekanizma/özellik** gerektiğini düşünüyorsan, uygulamadan **önce sor** —
+gerekçeni ve alternatifleri bir-iki cümleyle anlat, onay bekle.
+
+Ölçüt: kullanıcının cümlesinde geçmeyen, yeni bir davranış/akış/entegrasyon
+ekliyorsan bu "büyük karar"dır. Somut örnek (gerçekten yaşandı): "doPost içine
+console log'ları yerleştir" denildiğinde yapılması gereken tam olarak
+`console.log` eklemekti. Logları Telegram'a döken bir `DEBUG` modu tasarlamak —
+gerekçesi teknik olarak sağlam olsa bile — istenmeyen bir kapsam genişletmesiydi
+ve geri alınmak zorunda kaldı.
+
+Kapsam genişletmesi SAYILMAYANLAR: istenen işin doğrudan parçası olan küçük
+sertleştirmeler (null guard, hata mesajını anlaşılır yapmak), dokümantasyon
+güncellemesi, isim/biçim düzeltmeleri.
+
+### 2. İlgili dizinin CLAUDE.md'sine uy
+
+Her işten önce **kök `CLAUDE.md`** + **çalışılan dizinin `CLAUDE.md`'si**
+birlikte okunur ve ikisinin direktiflerine de uyulur. `apps-script/` altında bir
+iş yapılacaksa `apps-script/CLAUDE.md` bağlayıcıdır: oradaki "Bilinen
+varsayımlar / kırılgan noktalar" ve çözülmüş sorun kayıtları (ör. update dedup
+tasarım kararları) yeniden tartışılmadan korunur.
+
 ## Genel bakış
 Repo iki paralel akış barındırıyor:
 
