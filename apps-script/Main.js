@@ -25,6 +25,7 @@
 /** Gemini'nin döndürdüğü fonksiyon adını (bkz. Expenses.js) gerçek implementasyona eşler. */
 const FUNCTION_MAP = {
   harcamaEkle: harcamaEkle,
+  taksitliHarcamaEkle: taksitliHarcamaEkle,
   sonHarcamalariGetir: sonHarcamalariGetir,
   sonHarcamalariTopla: sonHarcamalariTopla,
 };
@@ -155,6 +156,26 @@ const SYSTEM_INSTRUCTION_TEMPLATE = [
   "üretme, adını kısaltma/değiştirme. Bir harcama bu 17'den hiçbirine net",
   "oturmuyorsa ZORUNLU NETLİK KURALI gereği o kalem için harcamaEkle'yi çağırma,",
   "kullanıcıya sor.",
+  "",
+  "TAKSİTLİ HARCAMALAR:",
+  'Kullanıcı bir harcamayı taksitle yaptığını belirtirse (ör. "5 taksitle X',
+  'aldım", "X\'i 6 taksitte alacağım") harcamaEkle YERİNE taksitliHarcamaEkle',
+  "fonksiyonunu TEK SEFER çağır — taksit sayısı kadar ayrı harcamaEkle çağırma,",
+  "tarih/tutar hesaplamasını SEN yapma; bunlar kodda deterministik olarak",
+  "hesaplanır.",
+  '- tutarTipi: "toplamda/toplam X TL\'ye", "X TL\'yi N taksitte" gibi ifadeler',
+  '  TOPLAM\'a; "ayda/taksit başına X TL", "her ay X TL ödeyeceğim" gibi',
+  "  ifadeler TAKSIT_BASI'na işaret eder. Metinden hangisi olduğu NET",
+  '  çıkarılamıyorsa (ör. sadece "5 taksitle X aldım, 5000 TL" dendiğinde',
+  "  5000'in toplam mı taksit başı mı olduğu belirsizse) ZORUNLU NETLİK KURALI",
+  '  gibi fonksiyonu ÇAĞIRMA, kullanıcıya "toplam mı yoksa taksit başına mı?"',
+  "  diye açıkça sor — ASLA varsayım yapıp tahmin etme.",
+  "- ilkTarih: harcamaEkle'deki tarih alanıyla AYNI ZAMAN BAĞLAMI kurallarıyla",
+  "  hesapla; referans gün her zaman kullanıcının belirttiği satın alma günüdür",
+  "  (mevcut ay içinde geçmiş/gelecek bir gün belirtilse bile o gün aynen",
+  "  kullanılır).",
+  '- Her taksidin "(k/N)" etiketi ve ay sonu çakışması gibi hesaplamalar',
+  "  otomatik yapılır, bunlarla ilgilenmene gerek yok.",
   "",
   "ZORUNLU NETLİK KURALI (çok önemli):",
   "Bir harcama kaleminin TUTAR, TARİH ve TÜR/KATEGORİ bilgisi kesin ve tartışmasız",
@@ -380,6 +401,43 @@ function calistirFonksiyon_(functionCall) {
   }
 }
 
+/** `/komutlar` çıktısı ve tanınmayan komutlarda gösterilecek ortak liste. */
+const KOMUT_LISTESI_METNI = [
+  "Kullanılabilir komutlar:",
+  "/son [N] — son N harcamayı listeler (belirtilmezse 5).",
+  "/toplam [N] — son N harcamanın toplamını hesaplar (belirtilmezse 5).",
+  "/komutlar — bu listeyi gösterir.",
+].join("\n");
+
+/**
+ * `/` ile başlayan komutları Gemini'ye HİÇ göndermeden doğrudan işler —
+ * sıfır Gemini API maliyeti/gecikmesi, tamamen deterministik (bkz.
+ * apps-script/CLAUDE.md madde 2). Tanınmayan komutlar bir hata mesajı +
+ * komut listesiyle karşılanır.
+ * @param {string} text Kullanıcının `/` ile başlayan tam mesajı.
+ * @return {string} Telegram'a gönderilecek yanıt.
+ */
+function islemKomut_(text) {
+  var parcalar = text.trim().split(/\s+/);
+  var komut = parcalar[0].toLowerCase();
+  var argument = parcalar[1];
+
+  log_("komut.cagri", { komut: komut, argument: argument });
+
+  if (komut === "/son") {
+    return sonHarcamalariGetir({ adet: normalizeAdet_(argument) });
+  }
+  if (komut === "/toplam") {
+    return sonHarcamalariTopla({ adet: normalizeAdet_(argument) });
+  }
+  if (komut === "/komutlar") {
+    return KOMUT_LISTESI_METNI;
+  }
+
+  log_("komut.bilinmeyen", komut);
+  return "Komut bulunamadı: " + komut + "\n\n" + KOMUT_LISTESI_METNI;
+}
+
 /**
  * Gemini'den dönen parts dizisini (birden fazla functionCall + opsiyonel bir
  * text part aynı anda bulunabilir) tek bir Telegram mesajına birleştirir.
@@ -565,6 +623,16 @@ function doPost(e) {
         chatId,
         "Şu an sadece yazılı mesajları anlayabiliyorum. 🙂",
       );
+      return respondOk_();
+    }
+
+    // `/` ile başlayan komutlar Gemini'ye hiç gitmeden burada, deterministik
+    // olarak işlenir (bkz. islemKomut_ ve apps-script/CLAUDE.md madde 2).
+    if (text.trim().charAt(0) === "/") {
+      var komutCevabi = islemKomut_(text);
+      log_("doPost.komut-cevap", komutCevabi);
+      sendTelegramMessage_(chatId, komutCevabi);
+      log_("doPost.tamamlandi", { toplamSureMs: Date.now() - baslangic });
       return respondOk_();
     }
 

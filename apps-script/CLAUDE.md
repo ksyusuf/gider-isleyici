@@ -253,16 +253,20 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
    - `/yardim` — botun nasıl kullanılacağını, örnek mesaj formatlarını
      anlatan statik bir metin döner
 2. **`doPost`'ta `/` ile başlayan komutları Gemini'ye göndermeden doğrudan
-   işlemek** — `text.startsWith("/")` ise ilgili fonksiyonu doğrudan
-   tetiklemek hem daha hızlı hem daha ucuzdur (Gemini API çağrısı harcanmaz)
-   hem de daha güvenilirdir (deterministik komutlar için modele güvenmeye
-   gerek yok). `/son 10` gibi parametreli komutlar boşluktan bölünüp basitçe
-   parse edilebilir.
-3. **`/iptal` — son eklenen harcamayı geri alma** — tablo TARİH'e göre azalan
-   sıralı olduğundan "son eklenen" her zaman `SHEET_LAYOUT.START_ROW`'daki
-   satırdır. `sheet.deleteRow(SHEET_LAYOUT.START_ROW)` ile silinebilir.
-   Yanlışlıkla eklenen bir harcamayı düzeltmek için kullanıcı deneyimini
-   büyük ölçüde iyileştirir — şu an tek yol tabloyu elle açıp satırı silmek.
+   işlemek** — **UYGULANDI (2026-08-31):** `Main.js > islemKomut_` +
+   `doPost`'taki erken-çıkış dalı. Komutlar: `/son [N]`, `/toplam [N]`,
+   `/komutlar` (komut listesi); tanınmayan `/xxx` → "Komut bulunamadı" +
+   aynı liste (`KOMUT_LISTESI_METNI`). Sıfır Gemini API çağrısı/maliyeti —
+   Node üzerinde mock Sheets ile doğrulandı.
+3. **`/iptal` — son eklenen harcamayı geri alma** — **ASKIYA ALINDI
+   (2026-08-31, kullanıcı kararı).** Orijinal fikir "son eklenen satır =
+   `SHEET_LAYOUT.START_ROW`" varsayımına dayanıyordu; bu artık geçerli
+   değil çünkü **taksitli harcama** özelliği (bkz. madde 12) GELECEK
+   tarihli satırlar yazıyor ve tablo tarihe göre sıralandığı için bu
+   satırlar en üstte görünebiliyor — yani "en üstteki satır" fiilen "en
+   son eklenen" ile aynı şey değil. Bu özelliği ileride hayata geçirmek
+   için önce bir işaretleme/saklama mekanizması (ör. her yazılan satırın
+   `update_id`'sini veya sıra numarasını ayrı bir yerde tutmak) gerekiyor.
 
 ### Orta vadeli
 
@@ -423,7 +427,50 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
     `sonHarcamalariGetir`/`sonHarcamalariTopla`'ya kategori bazlı
     filtreleme/gruplama eklenmiyor (bkz. madde 6/7, ayrı ve henüz
     onaylanmamış özellikler).
-12. **Bot'un kendi gönderdiği (özellikle "❓ Netleştirilmesi gerekenler")
+12. **Taksitli harcama ayrıştırma** — kullanıcının açık isteği
+    (2026-08-31). **UYGULANDI:** `Config.js > TOOLS`'a `taksitliHarcamaEkle`
+    fonksiyonu eklendi (`tutar`, `tutarTipi` enum `["TOPLAM","TAKSIT_BASI"]`,
+    `taksitSayisi`, `kategori`, `ilkTarih`, `firma`, `malzeme`, `aciklama`).
+
+    **Tasarım kararı:** taksit matematiği (ay ekleme, tutar bölme, "k/N"
+    numaralandırma) KASITLI olarak Gemini'ye değil KODA yaptırılıyor —
+    Gemini sadece alanları TEK çağrıda çıkarır, N satırı yazma tamamen
+    deterministik (`Expenses.js > taksitliHarcamaEkle`). Gerekçe: LLM'e çok
+    adımlı aritmetik (N kez ay ekleme, doğru sıralama) yaptırmak hataya çok
+    açık; kodda %100 doğru ve ucuz.
+
+    **Kullanıcı kararları (yeniden tartışılmadan korunmalı):**
+    - İlk taksidin referans günü = kullanıcının belirttiği satın alma günü
+      (mevcut ay içinde geçmiş/gelecek bir gün belirtilse bile o gün aynen
+      kullanılır) — `harcamaEkle`'nin `tarih` alanıyla AYNI ZAMAN BAĞLAMI
+      çözümlemesi (`parseTarih_`), farklı bir kural yok.
+    - Ay sonu çakışmasında (ör. 31 Ocak + 1 ay → Şubat'ta 31 yok) hedef ayın
+      SON gününe çekilir — bkz. `Expenses.js > ayEkle_`
+      (`new Date(yil, ay+1, 0)` tekniğiyle "ayın son günü" bulunur).
+    - Toplam mı taksit başı mı tutar verildiği metinden net çıkarılamıyorsa
+      ZORUNLU NETLİK KURALI'nın AYNISI uygulanır: fonksiyon çağrılmaz,
+      kullanıcıya açıkça sorulur — asla varsayım yapılmaz.
+    - Telegram'a dönen onay TEK bir mesajdır ama her taksidin tarihini tek
+      tek listeler (kısa özet değil) — kullanıcı taksitli harcamayı sık
+      yapmadığı için netlik tercih edildi.
+
+    **Kod tekrarını önlemek için refactor:** `harcamaEkle`'nin satır-yazma
+    mantığı (`findNextDataRow_` + `setValues` + `sortByDateDescending_`)
+    ortak `Expenses.js > satirYaz_` yardımcısına çıkarıldı; tutar/kategori
+    doğrulaması da `dogrulaTutar_`/`dogrulaKategori_` olarak ayrıştırılıp
+    her iki fonksiyon arasında paylaşıldı.
+
+    Node üzerinde mock Sheets ile doğrulandı: ay sonu çakışması (31 Ocak →
+    28 Şubat → 31 Mart → 30 Nisan), TOPLAM/TAKSIT_BASI tutar hesaplaması,
+    geçersiz `tutarTipi`/`taksitSayisi`/`kategori` reddi, ve `harcamaEkle`
+    refactor sonrası regresyon kontrolü.
+
+    **Kapsam dışı:** ilgili spreadsheet satırlarını geriye dönük bulup
+    silme/güncelleme (`/iptal`, bkz. madde 3 — bu özellikle çakıştığı için
+    askıya alındı); `sonHarcamalariGetir`/`sonHarcamalariTopla`'ya taksit
+    bazlı özel gösterim eklenmedi (mevcut genel "son N satır" mantığı
+    aynen kullanılıyor).
+13. **Bot'un kendi gönderdiği (özellikle "❓ Netleştirilmesi gerekenler")
     mesajlarını otomatik temizleme** — kullanıcı isteği: eski/işi biten
     netleştirme mesajlarının sohbette birikmesini istemiyor. Telegram'ın
     `deleteMessage` metodu bunu teknik olarak destekliyor ama iki sert kısıtı

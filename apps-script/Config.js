@@ -268,6 +268,77 @@ const TOOLS = [
     },
   },
   {
+    name: "taksitliHarcamaEkle",
+    description:
+      "Kullanıcının taksitli olarak yaptığı TEK bir harcamayı otomatik olarak " +
+      "taksitSayisi kadar ayrı satıra böler (her biri ilgili ayın aynı gününde, " +
+      "açıklamasında 'k/N' etiketiyle). Taksit tarihi/tutarı hesaplaması KODDA " +
+      "yapılır, sen sadece alanları eksiksiz çıkarırsın. tutar, tutarTipi, " +
+      "taksitSayisi ve kategori kesin ve tartışmasız biçimde belirlenebiliyorsa " +
+      "çağır; aksi halde ÇAĞIRMA ve belirsizliği metin yanıtında açıkla.",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        tutar: {
+          type: "NUMBER",
+          description:
+            "Kullanıcının belirttiği tutar — tutarTipi'ne göre TOPLAM tutar ya " +
+            "da TEK bir taksidin tutarı olabilir (ikisi karıştırılmamalı, bkz. " +
+            "tutarTipi).",
+        },
+        tutarTipi: {
+          type: "STRING",
+          enum: ["TOPLAM", "TAKSIT_BASI"],
+          description:
+            "Yukarıdaki tutar alanının anlamı. 'toplamda/toplam X TL'ye', " +
+            "'X TL'yi N taksitte' gibi ifadeler TOPLAM'a; 'ayda/taksit başına " +
+            "X TL', 'her ay X TL ödeyeceğim' gibi ifadeler TAKSIT_BASI'na " +
+            "işaret eder. Metinden hangisi olduğu net çıkarılamıyorsa bu alanı " +
+            "doldurma ve fonksiyonu çağırma — kullanıcıya toplam mı taksit " +
+            "başı mı olduğunu sor.",
+        },
+        taksitSayisi: {
+          type: "NUMBER",
+          description: "Taksit sayısı (N). En az 2 olmalı.",
+        },
+        kategori: {
+          type: "STRING",
+          enum: KATEGORILER.map(function (k) {
+            return k.ad;
+          }),
+          description:
+            "Harcamanın kategorisi — harcamaEkle'deki kategori alanıyla " +
+            "BİREBİR aynı kurallar geçerlidir (KATEGORILER listesinden birebir " +
+            "seç).",
+        },
+        ilkTarih: {
+          type: "STRING",
+          description:
+            "İlk taksidin tarihi, YYYY-MM-DD formatında MUTLAK tarih. " +
+            "harcamaEkle'deki tarih alanıyla AYNI ZAMAN BAĞLAMI kurallarıyla " +
+            "hesapla; kullanıcı tarih belirtmediyse mesajın gönderildiği günü " +
+            "kullan.",
+        },
+        firma: {
+          type: "STRING",
+          description:
+            "Harcamanın yapıldığı firma/işletme/yer adı (varsa). Opsiyonel.",
+        },
+        malzeme: {
+          type: "STRING",
+          description: "Satın alınan somut ürün/malzeme adı (varsa). Opsiyonel.",
+        },
+        aciklama: {
+          type: "STRING",
+          description:
+            "Ek bilgi (opsiyonel). Her satırın açıklamasına otomatik eklenen " +
+            "'(k/N)' etiketinden ÖNCE, ham haliyle verilir.",
+        },
+      },
+      required: ["tutar", "tutarTipi", "taksitSayisi", "kategori"],
+    },
+  },
+  {
     name: "sonHarcamalariGetir",
     description:
       "En son eklenen harcamaları listeler (tablo tarihe göre azalan sıralı olduğundan " +
