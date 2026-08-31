@@ -222,6 +222,27 @@ function harcamaEkle(args) {
   var tarihDate = parseTarih_(args.tarih);
   var firma = harfBuyukYap_(args.firma || "");
   var tur = harfBuyukYap_(kategoriGirdi);
+
+  // Üçüncü zorlama katmanı (bkz. Config.js > TOOLS > kategori enum'u ve
+  // Main.js > systemInstruction KATEGORİLER bloğu): modelin şemaya/prompta
+  // uyacağına güvenilmez, kanonik listeye birebir eşleşmeyen kategori
+  // reddedilir. KATEGORILER.ad değerleri harfBuyukYap_ ile aynı title-case
+  // biçimde yazıldığı için tam string eşitliği yeterlidir.
+  var kategoriGecerliMi = KATEGORILER.some(function (k) {
+    return k.ad === tur;
+  });
+  if (!kategoriGecerliMi) {
+    throw new Error(
+      "Geçersiz kategori: '" +
+        tur +
+        "'. Kategori şu listeden biri olmalı: " +
+        KATEGORILER.map(function (k) {
+          return k.ad;
+        }).join(", ") +
+        ".",
+    );
+  }
+
   var malzeme = args.malzeme ? harfBuyukYap_(args.malzeme) : "";
   var aciklama = harfBuyukYap_(args.aciklama || "");
 

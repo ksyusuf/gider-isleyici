@@ -2,8 +2,9 @@
  * ============================================================================
  * Gider İşleyici — Konfigürasyon ve Gemini Tool Şeması
  * ============================================================================
- * Sır/ortam bilgileri (CONFIG), sheet düzeni sabitleri (SHEET_LAYOUT) ve
- * Gemini'ye gönderilen function-calling şemaları (TOOLS) burada tutulur.
+ * Sır/ortam bilgileri (CONFIG), sheet düzeni sabitleri (SHEET_LAYOUT), sabit
+ * harcama kategorileri (KATEGORILER) ve Gemini'ye gönderilen function-calling
+ * şemaları (TOOLS) burada tutulur.
  *
  * İlgili diğer dosyalar:
  *   - Expenses.js: Sheets erişim yardımcıları + harcamaEkle / sonHarcamalariGetir / sonHarcamalariTopla
@@ -54,6 +55,152 @@ const SHEET_LAYOUT = {
 };
 
 // ============================================================================
+// KATEGORILER — sabit harcama kategorisi listesi
+// ============================================================================
+
+/**
+ * Kanonik, sabit kategori listesi (bkz. apps-script/CLAUDE.md > madde 11,
+ * kullanıcıyla 2026-08-31'de kesinleştirildi — yeniden tartışılmadan
+ * korunmalı). TEK KAYNAK budur: `TOOLS`'taki `kategori` enum'u ve
+ * `Main.js`'teki systemInstruction'a gömülen kategori tanımları buradan
+ * üretilir, aksi halde iki yerde tutulan tanımlar zamanla birbirinden sapar.
+ *
+ * - `ad`: kanonik görünen isim; `harfBuyukYap_`'ın (Expenses.js) üreteceği
+ *   tam title-case biçimde yazılır — hem Gemini enum üyesi hem de sheet'e
+ *   yazılacak literal TÜR değeri budur.
+ * - `anahtar`: ASCII büyük-harf-alt-tire kimlik; bugün kullanılmıyor ama
+ *   ileride bir `BUTCE_<KATEGORI>` Script Property anahtarı olarak
+ *   kullanılabilsin diye şimdiden netleştirildi.
+ * - `kapsar` (zorunlu) / `kapsamaz` (yalnızca karışabilen kategorilerde var):
+ *   modelin doğal dil metnindeki sinyalleri (ürün adı, mekan adı, fiil,
+ *   sağlayıcı tipi) doğru kategoriyle eşleştirebilmesi için gereken tanım —
+ *   enum TEK BAŞINA (isim listesi) bunun için yeterli değildir.
+ */
+const KATEGORILER = [
+  {
+    ad: "Ev",
+    anahtar: "EV",
+    kapsar:
+      "Ev eşyası, mobilya, ev tadilat/bakım harcamaları ve market/gıda " +
+      'alışverişi (market alışverişinde malzeme alanına "Market" yazılır).',
+  },
+  {
+    ad: "Yemek",
+    anahtar: "YEMEK",
+    kapsar: "Dışarıda yenilen veya sipariş edilen yemekler.",
+    kapsamaz:
+      "Kafede yenilen/içilen her şey; mekan kafeyse ürün ne olursa olsun " +
+      "kategori Cafe'dir.",
+  },
+  {
+    ad: "Cafe",
+    anahtar: "CAFE",
+    kapsar:
+      "Sohbet/vakit geçirme amaçlı kafe harcamaları; mekan kafeyse ürün ne " +
+      "olursa olsun (kahve, tost, tatlı) buraya girer.",
+  },
+  {
+    ad: "Spor",
+    anahtar: "SPOR",
+    kapsar:
+      "Sportif faaliyetlerin tümü: salon üyeliği, ders ücreti, spor " +
+      "ekipmanı/malzemesi.",
+    kapsamaz: "Spor kıyafeti/ayakkabısı (bkz. Giyim).",
+  },
+  {
+    ad: "Elektronik",
+    anahtar: "ELEKTRONIK",
+    kapsar:
+      "Fiziksel elektronik cihaz/ürün satın alımları (telefon, kulaklık, " +
+      "şarj aleti vb.).",
+    kapsamaz: "Yazılım/uygulama/dijital hizmet (bkz. Dijital).",
+  },
+  {
+    ad: "Araç",
+    anahtar: "ARAC",
+    kapsar:
+      "Kullanıcının kendi aracının bakım ve giderleri: yakıt, bakım, " +
+      "tamir, sigorta, muayene, kendi aracıyla otopark.",
+    kapsamaz:
+      "Araç kiralama (bkz. Kiralama), kendi aracı dışındaki ulaşım " +
+      "(bkz. Ulaşım).",
+  },
+  {
+    ad: "Kişisel",
+    anahtar: "KISISEL",
+    kapsar:
+      "Kişisel bakım/kozmetik harcamaları ve kırtasiye/küçük ofis-ev " +
+      "malzemesi.",
+  },
+  {
+    ad: "Destek",
+    anahtar: "DESTEK",
+    kapsar:
+      "Karşılıksız verilen paralar: düğün/davet takı-nakit hediyeleri, " +
+      "sadaka, zekat, karşılıksız (faizsiz) verilen borçlar.",
+    kapsamaz: "Somut hediye eşyası (bkz. Hediye).",
+  },
+  {
+    ad: "Giyim",
+    anahtar: "GIYIM",
+    kapsar: "Giyim eşyası (spor kıyafeti/ayakkabısı dahil).",
+  },
+  {
+    ad: "Eğlence",
+    anahtar: "EGLENCE",
+    kapsar: "Sinema, konser, oyun bileti gibi organize eğlence etkinlikleri.",
+    kapsamaz: "Kafede sohbet/vakit geçirme (bkz. Cafe).",
+  },
+  {
+    ad: "Ulaşım",
+    anahtar: "ULASIM",
+    kapsar:
+      "Kendi aracı dışındaki ulaşım: otobüs, metro, akbil/abonman, " +
+      "taksi/uber, uçak/tren bileti.",
+  },
+  {
+    ad: "Hastane",
+    anahtar: "HASTANE",
+    kapsar: "Sağlık/tıbbi harcamalar: doktor, eczane/ilaç/vitamin, tedavi.",
+    kapsamaz: "Kozmetik/bakım ürünü (bkz. Kişisel).",
+  },
+  {
+    ad: "Hediye",
+    anahtar: "HEDIYE",
+    kapsar: "Somut hediye eşyaları.",
+    kapsamaz: "Nakit/altın karşılıksız yardım (bkz. Destek).",
+  },
+  {
+    ad: "Eğitim",
+    anahtar: "EGITIM",
+    kapsar: "Eğitim, kurs, ders kitabı vb. harcamalar.",
+  },
+  {
+    ad: "Kiralama",
+    anahtar: "KIRALAMA",
+    kapsar: "Araç, ev veya başka bir şeyin kiralanması (ev kirası dahil).",
+  },
+  {
+    ad: "Fatura",
+    anahtar: "FATURA",
+    kapsar:
+      "Elektrik, su, doğalgaz, internet, telefon hattı gibi altyapı/hat " +
+      "sağlayıcısına yapılan zorunlu düzenli ödemeler.",
+    kapsamaz: "İçerik/yazılım platformu abonelikleri (bkz. Dijital).",
+  },
+  {
+    ad: "Dijital",
+    anahtar: "DIJITAL",
+    kapsar:
+      "Netflix, Spotify, bulut depolama, yazılım/uygulama abonelikleri, " +
+      "dijital oyun/uygulama satın alımı (tek seferlik dahil).",
+    kapsamaz:
+      "Fiziksel cihaz satın alımı (bkz. Elektronik), altyapı/hat faturası " +
+      "(bkz. Fatura).",
+  },
+];
+
+// ============================================================================
 // TOOLS — Gemini function declarations
 // ============================================================================
 
@@ -81,9 +228,15 @@ const TOOLS = [
         },
         kategori: {
           type: "STRING",
+          enum: KATEGORILER.map(function (k) {
+            return k.ad;
+          }),
           description:
-            "Harcamanın türü/kategorisi (örn. Yemek, Ulaşım, Market, Kişisel, Fatura). " +
-            "Metinden makul biçimde çıkarılamıyorsa bu alanı doldurma ve fonksiyonu çağırma.",
+            "Harcamanın kategorisi. KATEGORILER listesinden (enum) BİREBİR birini " +
+            "seç; listede olmayan ya da benzetilmiş yeni bir kategori ASLA üretme. " +
+            "Kategori tanımları ve ayrım kuralları systemInstruction'da verilmiştir; " +
+            "hangi kategoriye karşılık geldiği net değilse bu alanı doldurma ve " +
+            "fonksiyonu çağırma.",
         },
         aciklama: {
           type: "STRING",
