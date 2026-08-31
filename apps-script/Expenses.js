@@ -161,6 +161,91 @@ function harfBuyukYap_(text) {
 }
 
 /**
+ * Tutarı Türkiye yerel ayarına göre biçimlendirir: binlik ayracı ".",
+ * ondalık ayracı "," (ör. 1234.5 -> "1.234,50"). Telegram'a dönen TÜM
+ * parasal gösterimlerde (`toFixed(2)` yerine) kullanılır.
+ * @param {number} tutar
+ * @return {string}
+ */
+function paraFormatla_(tutar) {
+  return Number(tutar).toLocaleString("tr-TR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/**
+ * `date` tarihine `ay` ay ekler. Hedef ayda `date`'in günü yoksa (ör. 31 Ocak
+ * + 1 ay → Şubat'ta 31 yok) o ayın SON gününe çeker (kullanıcı kararı — bkz.
+ * apps-script/CLAUDE.md, taksitli harcama tasarımı). `new Date(y, m+1, 0)`
+ * tekniği "m ayının son günü"nü verir; JS Date ay taşmasını (ör. 13 → bir
+ * sonraki yılın 1. ayı) kendiliğinden doğru normalize eder.
+ * @param {Date} date
+ * @param {number} ay
+ * @return {Date}
+ */
+function ayEkle_(date, ay) {
+  var yil = date.getFullYear();
+  var hedefAyIndex = date.getMonth() + ay;
+  var hedefAyinSonGunu = new Date(yil, hedefAyIndex + 1, 0).getDate();
+  var hedefGun = Math.min(date.getDate(), hedefAyinSonGunu);
+  return new Date(yil, hedefAyIndex, hedefGun, 12, 0, 0);
+}
+
+/**
+ * Tutarın pozitif, geçerli bir sayı olduğunu doğrular.
+ * @param {number} tutar
+ */
+function dogrulaTutar_(tutar) {
+  if (!isFinite(tutar) || tutar <= 0) {
+    throw new Error("Geçersiz tutar: harcama tutarı pozitif bir sayı olmalı.");
+  }
+}
+
+/**
+ * `tur`un (harfBuyukYap_ ile normalize edilmiş kategori) KATEGORILER
+ * listesindeki kanonik isimlerden biriyle birebir eşleştiğini doğrular.
+ * Üçüncü zorlama katmanı (bkz. Config.js > TOOLS > kategori enum'u ve
+ * Main.js > systemInstruction KATEGORİLER bloğu): modelin şemaya/prompta
+ * uyacağına güvenilmez.
+ * @param {string} tur
+ */
+function dogrulaKategori_(tur) {
+  var kategoriGecerliMi = KATEGORILER.some(function (k) {
+    return k.ad === tur;
+  });
+  if (!kategoriGecerliMi) {
+    throw new Error(
+      "Geçersiz kategori: '" +
+        tur +
+        "'. Kategori şu listeden biri olmalı: " +
+        KATEGORILER.map(function (k) {
+          return k.ad;
+        }).join(", ") +
+        ".",
+    );
+  }
+}
+
+/**
+ * Tek bir harcama satırını hedef sayfada ilk boş satıra yazar ve tabloyu
+ * tarihe göre azalan sıralar. `harcamaEkle` ve `taksitliHarcamaEkle`
+ * arasında paylaşılan ortak yazma mantığı.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Array<*>} satirDegerleri [tarihDate, tutar, firma, tur, malzeme, aciklama]
+ * @return {number} Yazılan satırın 1-indeksli numarası.
+ */
+function satirYaz_(sheet, satirDegerleri) {
+  var hedefSatir = findNextDataRow_(sheet);
+  sheet
+    .getRange(hedefSatir, SHEET_LAYOUT.START_COL, 1, SHEET_LAYOUT.NUM_COLS)
+    .setValues([satirDegerleri]);
+  var sonSatir = Math.max(sheet.getLastRow(), hedefSatir);
+  sortByDateDescending_(sheet, sonSatir);
+  return hedefSatir;
+}
+
+/**
  * adet parametresini güvenli bir pozitif tam sayıya normalize eder.
  * @param {*} adet
  * @return {number}
@@ -210,9 +295,7 @@ function harcamaEkle(args) {
   args = args || {};
 
   var tutar = Number(args.tutar);
-  if (!isFinite(tutar) || tutar <= 0) {
-    throw new Error("Geçersiz tutar: harcama tutarı pozitif bir sayı olmalı.");
-  }
+  dogrulaTutar_(tutar);
 
   var kategoriGirdi = (args.kategori || "").toString().trim();
   if (!kategoriGirdi) {
@@ -222,26 +305,7 @@ function harcamaEkle(args) {
   var tarihDate = parseTarih_(args.tarih);
   var firma = harfBuyukYap_(args.firma || "");
   var tur = harfBuyukYap_(kategoriGirdi);
-
-  // Üçüncü zorlama katmanı (bkz. Config.js > TOOLS > kategori enum'u ve
-  // Main.js > systemInstruction KATEGORİLER bloğu): modelin şemaya/prompta
-  // uyacağına güvenilmez, kanonik listeye birebir eşleşmeyen kategori
-  // reddedilir. KATEGORILER.ad değerleri harfBuyukYap_ ile aynı title-case
-  // biçimde yazıldığı için tam string eşitliği yeterlidir.
-  var kategoriGecerliMi = KATEGORILER.some(function (k) {
-    return k.ad === tur;
-  });
-  if (!kategoriGecerliMi) {
-    throw new Error(
-      "Geçersiz kategori: '" +
-        tur +
-        "'. Kategori şu listeden biri olmalı: " +
-        KATEGORILER.map(function (k) {
-          return k.ad;
-        }).join(", ") +
-        ".",
-    );
-  }
+  dogrulaKategori_(tur);
 
   var malzeme = args.malzeme ? harfBuyukYap_(args.malzeme) : "";
   var aciklama = harfBuyukYap_(args.aciklama || "");
@@ -258,20 +322,19 @@ function harcamaEkle(args) {
   var t0 = Date.now();
   var spreadsheet = getTargetSpreadsheet_();
   var sheet = getTargetSheet_(spreadsheet);
-  var hedefSatir = findNextDataRow_(sheet);
-
-  sheet
-    .getRange(hedefSatir, SHEET_LAYOUT.START_COL, 1, SHEET_LAYOUT.NUM_COLS)
-    .setValues([[tarihDate, tutar, firma, tur, malzeme, aciklama]]);
-  log_("harcamaEkle.yazildi", { satir: hedefSatir });
-
-  var sonSatir = Math.max(sheet.getLastRow(), hedefSatir);
-  sortByDateDescending_(sheet, sonSatir);
-  log_("harcamaEkle.bitti", { sonSatir: sonSatir, sureMs: Date.now() - t0 });
+  var hedefSatir = satirYaz_(sheet, [
+    tarihDate,
+    tutar,
+    firma,
+    tur,
+    malzeme,
+    aciklama,
+  ]);
+  log_("harcamaEkle.bitti", { satir: hedefSatir, sureMs: Date.now() - t0 });
 
   var tarihEtiketi = Utilities.formatDate(tarihDate, TIME_ZONE, "dd.MM.yyyy");
   var ozet =
-    "✅ " + tutar.toFixed(2) + " TL - " + tur + " (" + tarihEtiketi + ")";
+    "✅ " + paraFormatla_(tutar) + " ₺ - " + tur + " (" + tarihEtiketi + ")";
   if (aciklama) {
     ozet += " - " + aciklama;
   }
@@ -298,10 +361,10 @@ function sonHarcamalariGetir(args) {
 
   var satirMetinleri = satirlar.map(function (row) {
     var tarih = Utilities.formatDate(new Date(row[0]), TIME_ZONE, "dd.MM.yyyy");
-    var tutar = Number(row[1] || 0).toFixed(2);
+    var tutar = paraFormatla_(Number(row[1] || 0));
     var tur = row[3] || "-";
     var aciklama = row[5] || "";
-    var satir = "📅 " + tarih + " | 💰 " + tutar + " TL | " + tur;
+    var satir = "📅 " + tarih + " | 💰 " + tutar + " ₺ | " + tur;
     if (aciklama) {
       satir += " | " + aciklama;
     }
@@ -337,7 +400,111 @@ function sonHarcamalariTopla(args) {
     "Son " +
     satirlar.length +
     " harcamanın toplamı: " +
-    toplam.toFixed(2) +
-    " TL"
+    paraFormatla_(toplam) +
+    " ₺"
   );
+}
+
+/**
+ * Taksitli bir harcamayı `taksitSayisi` kadar ayrı satıra böler: her satır
+ * ilgili ayın aynı gününde (ay sonu çakışmasında `ayEkle_` ile o ayın son
+ * gününe çekilir) ve açıklamasında "k/N" etiketiyle yazılır. Taksit
+ * matematiği (tutar bölme, tarih hesaplama, numaralandırma) KASITLI olarak
+ * kodda yapılır, Gemini'ye bırakılmaz — modelin çok adımlı aritmetikte
+ * (N kez ay ekleme, doğru sıralama) hata yapma riski yüksektir.
+ * @param {{tutar:number, tutarTipi:string, taksitSayisi:number, kategori:string, ilkTarih?:string, firma?:string, malzeme?:string, aciklama?:string}} args
+ * @return {string} Tüm taksitleri özetleyen TEK bir onay metni.
+ */
+function taksitliHarcamaEkle(args) {
+  args = args || {};
+
+  var tutar = Number(args.tutar);
+  dogrulaTutar_(tutar);
+
+  var tutarTipi = (args.tutarTipi || "").toString().trim().toUpperCase();
+  if (tutarTipi !== "TOPLAM" && tutarTipi !== "TAKSIT_BASI") {
+    throw new Error(
+      "Geçersiz tutarTipi: '" +
+        args.tutarTipi +
+        "'. 'TOPLAM' ya da 'TAKSIT_BASI' olmalı.",
+    );
+  }
+
+  var taksitSayisi = Math.floor(Number(args.taksitSayisi));
+  if (!isFinite(taksitSayisi) || taksitSayisi < 2) {
+    throw new Error("Geçersiz taksitSayisi: en az 2 olmalı.");
+  }
+
+  var kategoriGirdi = (args.kategori || "").toString().trim();
+  if (!kategoriGirdi) {
+    throw new Error("Kategori/tür bilgisi eksik.");
+  }
+  var tur = harfBuyukYap_(kategoriGirdi);
+  dogrulaKategori_(tur);
+
+  var ilkTarihDate = parseTarih_(args.ilkTarih);
+  var firma = harfBuyukYap_(args.firma || "");
+  var malzeme = args.malzeme ? harfBuyukYap_(args.malzeme) : "";
+  var kullaniciAciklamasi = harfBuyukYap_(args.aciklama || "");
+
+  var birTaksitTutari = tutarTipi === "TOPLAM" ? tutar / taksitSayisi : tutar;
+  birTaksitTutari = Math.round(birTaksitTutari * 100) / 100;
+  var toplamTutar =
+    tutarTipi === "TOPLAM" ? tutar : birTaksitTutari * taksitSayisi;
+
+  log_("taksitliHarcamaEkle.cozumlenen", {
+    tutar: tutar,
+    tutarTipi: tutarTipi,
+    taksitSayisi: taksitSayisi,
+    birTaksitTutari: birTaksitTutari,
+    tur: tur,
+    ilkTarih: Utilities.formatDate(ilkTarihDate, TIME_ZONE, "yyyy-MM-dd"),
+  });
+
+  var t0 = Date.now();
+  var spreadsheet = getTargetSpreadsheet_();
+  var sheet = getTargetSheet_(spreadsheet);
+
+  var taksitler = [];
+  for (var i = 0; i < taksitSayisi; i++) {
+    var taksitTarihi = ayEkle_(ilkTarihDate, i);
+    var etiket = i + 1 + "/" + taksitSayisi;
+    var aciklama = kullaniciAciklamasi
+      ? kullaniciAciklamasi + " (" + etiket + ")"
+      : "(" + etiket + ")";
+    satirYaz_(sheet, [
+      taksitTarihi,
+      birTaksitTutari,
+      firma,
+      tur,
+      malzeme,
+      aciklama,
+    ]);
+    taksitler.push({ etiket: etiket, tarih: taksitTarihi });
+  }
+
+  log_("taksitliHarcamaEkle.bitti", {
+    yazilanSatir: taksitler.length,
+    sureMs: Date.now() - t0,
+  });
+
+  var ozetBasligi =
+    "✅ Taksitli harcama eklendi: " +
+    tur +
+    ", " +
+    taksitSayisi +
+    " taksit, taksit başı " +
+    paraFormatla_(birTaksitTutari) +
+    " ₺ (toplam " +
+    paraFormatla_(toplamTutar) +
+    " ₺)";
+  var taksitMetinleri = taksitler.map(function (t) {
+    return (
+      t.etiket +
+      " — " +
+      Utilities.formatDate(t.tarih, TIME_ZONE, "dd.MM.yyyy")
+    );
+  });
+
+  return ozetBasligi + "\n" + taksitMetinleri.join("\n");
 }
