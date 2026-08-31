@@ -120,6 +120,42 @@ const SYSTEM_INSTRUCTION_TEMPLATE = [
   "gerekiyorsa aynı yanıt içinde birden fazla kez çağır. Farklı kalemleri tek bir çağrıda",
   "birleştirme, tutarları toplama, kategorileri karıştırma.",
   "",
+  "KATEGORİLER:",
+  "Aşağıdaki 17 kategori SABİTTİR; kategori seçimini SADECE bu listeden yap, listede",
+  "olmayan ya da benzetilmiş yeni bir kategori ASLA üretme:",
+  "{KATEGORI_TANIMLARI}",
+  "",
+  "KARIŞABİLEN KATEGORİLER — ÖNCELİK KURALLARI:",
+  "- Yemek ↔ Cafe: mekan bazlı karar — mekan kafeyse ürün ne olursa olsun Cafe.",
+  "- Fatura ↔ Dijital: sağlayıcı tipi bazlı — altyapı/hat sağlayıcısı → Fatura;",
+  "  içerik/yazılım platformu → Dijital.",
+  "- Elektronik ↔ Dijital: fiziksel mi dijital mi — cihaz → Elektronik; hizmet/",
+  "  yazılım/dijital içerik → Dijital.",
+  "- Araç ↔ Ulaşım ↔ Kiralama: kimin aracı + mülkiyet mi kiralama mı — kendi",
+  "  aracı bakım/gideri → Araç; kendi aracı dışı ulaşım → Ulaşım; araç/ev",
+  "  kiralama → Kiralama.",
+  "- Destek ↔ Hediye: nakit/altın mı eşya mı — nakit/altın karşılıksız yardım →",
+  "  Destek; somut eşya → Hediye.",
+  "- Kişisel ↔ Hastane ↔ Giyim ↔ Eğitim ↔ Spor: kozmetik/bakım/kırtasiye →",
+  "  Kişisel; sağlık amaçlı (vitamin dahil) → Hastane; giyilen her şey (spor",
+  "  kıyafeti dahil) → Giyim; kurs/ders kitabı → Eğitim; ekipman/üyelik/ders",
+  "  ücreti (kıyafet hariç) → Spor.",
+  "",
+  "ÖRNEKLER (kategori ayrımı):",
+  '- "cups clouds\'da ice americano içtim" → Cafe (mekan kafe, ürün ne olursa olsun)',
+  '- "kafede tost yedim" → Cafe (fiil "yedim" olsa da mekan sinyali kazanır)',
+  '- "eczaneden vitamin aldım" → Hastane (sağlık amaçlı, kozmetik değil)',
+  '- "telefon hattı faturamı ödedim" → Fatura (altyapı/hat sağlayıcısı)',
+  '- "netflix aboneliğim yenilendi" → Dijital (içerik platformu)',
+  '- "markette alışveriş yaptım" → Ev (malzeme alanına "Market" yaz)',
+  '- "spor ayakkabısı aldım" → Giyim (spor kıyafeti/ayakkabısı Spor\'a girmez)',
+  '- "bir araba kiraladım" → Kiralama (mülkiyet değil kiralama; kendi aracı da değil)',
+  "",
+  "Yukarıdaki 17 kategori TAM LİSTEDİR: bunların dışında yeni bir kategori ASLA",
+  "üretme, adını kısaltma/değiştirme. Bir harcama bu 17'den hiçbirine net",
+  "oturmuyorsa ZORUNLU NETLİK KURALI gereği o kalem için harcamaEkle'yi çağırma,",
+  "kullanıcıya sor.",
+  "",
   "ZORUNLU NETLİK KURALI (çok önemli):",
   "Bir harcama kaleminin TUTAR, TARİH ve TÜR/KATEGORİ bilgisi kesin ve tartışmasız",
   "biçimde belirlenebilir olmalıdır:",
@@ -127,7 +163,10 @@ const SYSTEM_INSTRUCTION_TEMPLATE = [
   '  "epey para harcadım" gibi belirsiz ifadelerde tutarı ASLA tahmin edip uydurma.',
   "- tarih: yukarıdaki ZAMAN BAĞLAMI kurallarıyla netleşmiyorsa (ör. hangi gün olduğu",
   '  belirsiz kalan bir "geçen [gün adı]" ifadesi) ASLA tahmin edip uydurma.',
-  '- tür/kategori: metinden makul biçimde çıkarılamıyorsa ("harcama yaptım" gibi) ASLA uydurma.',
+  "- tür/kategori: yukarıdaki KATEGORİLER listesindeki 17 kategoriden TAM OLARAK",
+  "  BİRİNE net biçimde karşılık gelmiyorsa (belirsiz, birden fazla kategoriye uyan",
+  "  ya da listede hiç bulunmayan bir harcama türüyse) ASLA tahmin edip uydurma ve",
+  "  ASLA listede olmayan yeni bir kategori üretme.",
   "Bu üç alandan HERHANGİ BİRİ net değilse, O KALEM İÇİN harcamaEkle'yi ÇAĞIRMA. Bunun",
   "yerine metin yanıtında o kalemle ilgili hangi bilginin eksik/belirsiz olduğunu açıkça",
   "belirt, böylece kullanıcı bir sonraki mesajında daha açıklayıcı yazabilsin. Aynı",
@@ -161,7 +200,27 @@ function formatZamanBaglami_(mesajZamani) {
 }
 
 /**
- * SYSTEM_INSTRUCTION_TEMPLATE içindeki {ZAMAN_BAGLAMI} yer tutucusunu doldurur.
+ * KATEGORILER sabitinden (Config.js) systemInstruction'a gömülecek numaralı
+ * kategori tanımları bloğunu üretir. Tek kaynak KATEGORILER'dır; kapsar/
+ * kapsamaz metinleri burada TEKRARLANMAZ, sadece biçimlendirilir.
+ * @return {string}
+ */
+function buildKategoriTanimlariBlok_() {
+  return KATEGORILER.map(function (k, i) {
+    var satir = i + 1 + ". **" + k.ad + "** — Kapsar: " + k.kapsar;
+    if (k.kapsamaz) {
+      satir += " Kapsamaz: " + k.kapsamaz;
+    }
+    return satir;
+  }).join("\n");
+}
+
+/**
+ * SYSTEM_INSTRUCTION_TEMPLATE içindeki {ZAMAN_BAGLAMI} ve {KATEGORI_TANIMLARI}
+ * yer tutucularını doldurur. Kategori bloğu her çağrıda (istek zamanında)
+ * yeniden üretilir — Config.js'in Main.js'ten önce yüklendiği varsayımına
+ * (clasp'ın dosya sırasına) bağlı kalmamak için modül yüklenirken değil,
+ * burada hesaplanır; maliyeti (17 elemanlı bir map+join) ihmal edilebilir.
  * @param {Date} mesajZamani
  * @return {string}
  */
@@ -169,7 +228,7 @@ function buildSystemInstruction_(mesajZamani) {
   return SYSTEM_INSTRUCTION_TEMPLATE.replace(
     "{ZAMAN_BAGLAMI}",
     formatZamanBaglami_(mesajZamani),
-  );
+  ).replace("{KATEGORI_TANIMLARI}", buildKategoriTanimlariBlok_());
 }
 
 /**

@@ -305,78 +305,124 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
     tutarlı uygulamasını sağlayabilir. Gerçek kullanım sonrası modelin hatalı
     davrandığı örnekler biriktirilip buraya eklenebilir.
 11. **Sabit kategori kümesi + kategori ayrım (disambiguation) prompt'u**
-    — kullanıcının açık isteği (2026-08-30). Bu madde bilinçli olarak
-    IMPLEMENTE EDİLMEDİ; amacı, bir sonraki agentic oturumda prompt şablonunun
-    ne kadar geliştirilebileceğini anlatmak.
+    — kullanıcının açık isteği (2026-08-30). **UYGULANDI (2026-08-31):**
+    `Config.js` (`KATEGORILER` sabiti + `TOOLS.kategori.enum`), `Main.js`
+    (`buildKategoriTanimlariBlok_` + systemInstruction'a KATEGORİLER/
+    KARIŞABİLEN KATEGORİLER/ÖRNEKLER blokları) ve `Expenses.js`
+    (`harcamaEkle`'de üçüncü katman kod-seviyesi doğrulama) güncellendi.
+    Mock Apps Script globalleriyle Node üzerinde doğrulandı: enum 17
+    kategoriyi doğru sırayla veriyor, `buildSystemInstruction_` her iki yer
+    tutucuyu da dolduruyor, kod-seviyesi doğrulama eski/geçersiz isimleri
+    ("kırtasiye", "Dijital Abonelik") doğru reddediyor. Gerçek Telegram
+    sohbetiyle uçtan uca smoke-test henüz yapılmadı (bkz. plan dosyasındaki
+    Doğrulama Planı) — deploy öncesi TEST_MODE ile çalıştırılmalı.
 
     **Hedef:** kullanıcının kendi sabit kategorileri API isteğine dahil
     edilecek ve Gemini'nin döndürdüğü `kategori` **kesinlikle** o kümeden biri
     olacak. Şu an `kategori` serbest metin; zamanla "Yemek", "yemek", "Gıda"
-    gibi varyasyonlar birikiyor.
+    gibi varyasyonlar birikiyor. Eski açık soru ("kategori listesi nerede?")
+    çözüldü: kanonik liste artık burada (aşağıda) sabitlendi; koda
+    `Config.js`'e tek kaynak (`KATEGORILER` sabiti) olarak taşınacak.
 
-    **⚠️ Önce çözülmesi gereken açık soru — kategori listesi nerede?**
-    Kullanıcı listenin `services/` altındaki Sheets sınıfında olduğunu
-    söyledi, ancak kod tarandı ve **sabit bir kategori listesi bulunamadı**:
-    - `services/SheetsGoogle.py` yalnızca sütun sözleşmesini (`TÜR` = 4.
-      sütun) ve `__main__` demo verisinde tek bir örnek değeri (`'Kişisel'`)
-      içeriyor.
-    - `services/DocsGoogle.py` kategoriyi serbest metin olarak alıyor
-      (`#t <tür>`); tek istisna `*` belirteci için otomatik `"Yemek"`
-      ataması (~satır 311).
+    **Kesinleşen 17 kategori** (her biri kapsar/kapsamaz ile tanımlı —
+    systemInstruction'a sadece isim değil bu tanımlar da girmeli, aksi halde
+    model metindeki sinyallerden doğru kategoriyi çıkaramaz):
 
-    Yani kanonik liste **kodda değil, gerçek spreadsheet'in TÜR sütununda**
-    yaşıyor. İlk iş: listeyi kullanıcıdan almak ya da tablodan okuyup
-    `Config.js`'e tek kaynak (`KATEGORILER` sabiti) olarak yazmak. Bu
-    netleşmeden prompt yazılmamalı.
+    1. **Ev** — Ev eşyası/mobilya/tadilat-bakım VE market/gıda alışverişi
+       (kullanıcı kararı: ayrı "Market" kategorisi yok; market alışverişi
+       Ev'e girer, `malzeme` alanına "Market" yazılır).
+    2. **Yemek** — Dışarıda yenilen/sipariş edilen yemekler. Kapsamaz:
+       kafede yenilen/içilen HER ŞEY (mekan kafeyse ürün ne olursa olsun
+       kategori Cafe'dir — eski "kafede tost yedim → ?" sorusu bununla
+       çözüldü).
+    3. **Cafe** — Sohbet/vakit geçirme amaçlı kafe harcamaları.
+    4. **Spor** — Sportif faaliyetlerin tümü (üyelik, ders, ekipman).
+       Kapsamaz: spor kıyafeti/ayakkabısı (bkz. Giyim).
+    5. **Elektronik** — Fiziksel elektronik cihaz satın alımı. Kapsamaz:
+       yazılım/dijital hizmet (bkz. Dijital).
+    6. **Araç** — Kendi aracının bakım/gideri: yakıt, bakım, sigorta,
+       muayene, otopark. Kapsamaz: araç kiralama (bkz. Kiralama), araç dışı
+       ulaşım (bkz. Ulaşım).
+    7. **Kişisel** — Kişisel bakım/kozmetik VE kırtasiye/küçük ofis-ev
+       malzemesi (kullanıcı kararı: ayrı Kırtasiye kategorisi kaldırıldı,
+       buraya katıldı).
+    8. **Destek** — Karşılıksız verilen paralar: düğün/davet takı-nakit,
+       sadaka, zekat, karşılıksız borç. Kapsamaz: somut hediye eşyası
+       (bkz. Hediye).
+    9. **Giyim** — Giyim eşyası (spor kıyafeti dahil).
+    10. **Eğlence** — Sinema/konser/oyun bileti gibi organize etkinlikler.
+        Kapsamaz: kafede sohbet (bkz. Cafe).
+    11. **Ulaşım** — Kendi aracı DIŞINDAKİ ulaşım: otobüs, metro, akbil,
+        taksi/uber, uçak/tren bileti.
+    12. **Hastane** — Sağlık/tıbbi harcamalar (doktor, eczane/ilaç/vitamin,
+        tedavi). Kapsamaz: kozmetik ürün (bkz. Kişisel).
+    13. **Hediye** — Somut hediye eşyaları. Kapsamaz: nakit/altın karşılıksız
+        yardım (bkz. Destek).
+    14. **Eğitim** — Eğitim, kurs, ders kitabı vb.
+    15. **Kiralama** — Araç/ev/başka bir şeyin kiralanması (ev kirası dahil).
+    16. **Fatura** — Elektrik/su/doğalgaz/internet/telefon HATTI faturaları
+        (altyapı/hat sağlayıcısına zorunlu düzenli ödeme). Kapsamaz:
+        içerik/yazılım platformu abonelikleri (bkz. Dijital).
+    17. **Dijital** — Netflix/Spotify/bulut depolama/yazılım-uygulama
+        abonelikleri, dijital oyun/uygulama satın alımı. Kapsamaz: fiziksel
+        cihaz (bkz. Elektronik), altyapı/hat faturası (bkz. Fatura).
 
-    **İki katmanlı zorlama (mevcut tasarım felsefesiyle uyumlu — bkz.
-    `Config.js > TOOLS` yorumu: "tek başına systemInstruction'a güvenilmez"):**
+    **"Diğer/Çeşitli" yedek kategori YOK** (kullanıcı kararı) — hiçbiri net
+    oturmayan harcamada model mevcut ZORUNLU NETLİK KURALI ile sorar,
+    uydurmaz.
+
+    **Fatura/Dijital neden iki ayrı kategori:** faturalar zorunlu/sabit
+    gider, dijital abonelikler isteğe bağlı/yaşam tarzı gideri — bu ayrım
+    "abonelik takibi" (kullanıcının orijinal isteği) için gerekli; ikisi
+    birleştirilseydi abonelik-şişmesi (subscription creep) görünürlüğü
+    kaybolurdu.
+
+    **Karışabilen çiftler/üçlüler — öncelik kuralları:**
+    - Yemek ↔ Cafe: **mekan bazlı** — mekan kafeyse ürün ne olursa olsun
+      Cafe.
+    - Fatura ↔ Dijital: **sağlayıcı tipi bazlı** — altyapı/hat sağlayıcısı
+      → Fatura; içerik/yazılım platformu → Dijital.
+    - Elektronik ↔ Dijital: **fiziksel mi dijital mi** — cihaz →
+      Elektronik; hizmet/yazılım/dijital içerik → Dijital.
+    - Araç ↔ Ulaşım ↔ Kiralama: **kimin aracı + mülkiyet mi kiralama mı** —
+      kendi aracı bakım/gideri → Araç; kendi aracı dışı ulaşım → Ulaşım;
+      araç/ev kiralama → Kiralama.
+    - Destek ↔ Hediye: **nakit/altın mı eşya mı** — nakit/altın karşılıksız
+      yardım → Destek; somut eşya → Hediye.
+    - Kişisel ↔ Hastane ↔ Giyim ↔ Eğitim ↔ Spor: kozmetik/bakım/kırtasiye →
+      Kişisel; sağlık amaçlı (vitamin dahil) → Hastane; giyilen her şey
+      (spor kıyafeti dahil) → Giyim; kurs/ders kitabı → Eğitim;
+      ekipman/üyelik/ders ücreti (kıyafet hariç) → Spor.
+
+    **Üç katmanlı zorlama** (mevcut tasarım felsefesiyle uyumlu — bkz.
+    `Config.js > TOOLS` yorumu: "tek başına systemInstruction'a güvenilmez"):
     - `TOOLS`'taki `kategori` parametresine JSON Schema `enum` eklemek
       (Gemini'nin OpenAPI-subset şeması `enum` destekliyor) — model şema
-      seviyesinde kısıtlanır.
-    - `systemInstruction`'a kategori tanımları + ayrım kuralları eklemek.
+      seviyesinde kısıtlanır. **Ama enum TEK BAŞINA yetersiz** — sadece isim
+      listesi verir, ayrım için kapsar/kapsamaz bilgisi taşımaz.
+    - `systemInstruction`'a (a) yukarıdaki 17 kategori tanımı, (b)
+      karışabilen çift/üçlü öncelik kuralları, (c) sınır-vaka odaklı
+      few-shot örnekleri (bkz. madde 10) eklemek — kategori tanımları
+      `KATEGORILER` sabitinden dinamik üretilip tek kaynak korunmalı.
     - **Üçüncü katman olarak kodda doğrulama:** `harcamaEkle`, listede
       olmayan bir `kategori` gelirse yazmayı reddedip netleştirme istemeli.
       Modelin şemaya uyacağına güvenilmemeli. Not: mevcut `harfBuyukYap_`
       normalizasyonu bu durumda yerini kanonik listeye birebir eşlemeye
       bırakmalı.
-
-    **Asıl mesele — prompt ne kadar gelişmiş olabilir:** kategori listesini
-    prompt'a düz bir liste olarak yapıştırmak yetmez. Kullanıcının verdiği
-    kanonik örnek: *"bugün cups clouds'da 180 tl ice americano içtim"* —
-    bunun bir **Kafe** harcaması olduğu insan için bellidir ama model doğal
-    olarak **Yemek**'e yazabilir. Şablonun taşıması gereken katmanlar:
-
-    1. **Kategori tanımları, sadece isimler değil.** Her kategori için kapsam
-       sınırı yazılmalı: neyi KAPSAR, neyi KAPSAMAZ. ("Kafe: kahve/çay/atıştırma
-       amaçlı oturma mekânlarındaki harcamalar. Öğün niteliğindeki restoran
-       harcamalarını kapsamaz.")
-    2. **Kategori sinyallerinin ayıklanması.** Model, metindeki kategoriye
-       işaret eden ifadeleri açıkça tespit etmeli: ürün adı ("ice americano",
-       "latte"), mekân adı ("cups clouds"), fiil ("içtim" vs "yedim"),
-       miktar/bağlam. Kullanıcının vurguladığı nokta tam olarak bu:
-       kategori kelimesi metinde geçmese bile ona **benzer/ima eden**
-       ifadeler ayıklanmalı.
-    3. **Karışabilen çiftler için açık öncelik kuralları.** Sadece
-       Kafe↔Yemek değil; her karışabilen çift için kural yazılmalı
-       (Market↔Yemek, Ulaşım↔Kişisel, Fatura↔Kişisel vb.). Sinyaller
-       çeliştiğinde hangisinin kazandığı belirtilmeli — ör. ürün sinyali mi
-       mekân sinyali mi baskın? Bu bir ürün kararı, kullanıcıya sorulmalı.
-    4. **Karışabilen çiftlere odaklı few-shot örnekleri** (bkz. madde 10).
-       Genel örnekler değil, tam olarak modelin yanıldığı sınır vakaları:
-       "ice americano içtim" → Kafe, "kafede tost yedim" → ?, "markette
-       hazır kahve aldım" → Market.
-    5. **Liste dışına çıkma yasağı + uydurma yasağı.** Model hiçbir koşulda
-       listede olmayan bir kategori üretmemeli; hiçbiri güvenle oturmuyorsa
-       **tahmin etmek yerine sormalı**. Bu, mevcut ZORUNLU NETLİK KURALI'nın
-       doğal uzantısıdır ve onunla aynı dille yazılmalı.
-    6. **Gerçek hatalardan beslenme.** Kullanımda modelin yanlış kategorilediği
-       vakalar biriktirilip few-shot örneklerine eklenmeli — prompt tek seferde
-       değil, gözlemle olgunlaşır.
+    - Model hiçbir koşulda bu 17'nin dışında bir kategori üretmemeli;
+      hiçbiri güvenle oturmuyorsa **tahmin etmek yerine sormalı** (ZORUNLU
+      NETLİK KURALI'nın doğal uzantısı).
 
     **Takas:** sabit küme, kullanıcının serbestçe yeni kategori açma
     esnekliğini kısıtlar. Yeni kategori eklemek `Config.js` düzenlemesi +
     redeploy gerektirir.
+
+    **Kapsam dışı bırakılanlar (bilinçli):** sheet'teki mevcut eski
+    serbest-metin TÜR değerlerinin ("Market", "Gıda" vb.) yeni kanonik
+    listeye migrasyonu yapılmayacak (yalnızca ileriye dönük zorlama);
+    `sonHarcamalariGetir`/`sonHarcamalariTopla`'ya kategori bazlı
+    filtreleme/gruplama eklenmiyor (bkz. madde 6/7, ayrı ve henüz
+    onaylanmamış özellikler).
 12. **Bot'un kendi gönderdiği (özellikle "❓ Netleştirilmesi gerekenler")
     mesajlarını otomatik temizleme** — kullanıcı isteği: eski/işi biten
     netleştirme mesajlarının sohbette birikmesini istemiyor. Telegram'ın
