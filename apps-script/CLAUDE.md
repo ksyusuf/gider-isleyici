@@ -427,6 +427,21 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
     `sonHarcamalariGetir`/`sonHarcamalariTopla`'ya kategori bazlı
     filtreleme/gruplama eklenmiyor (bkz. madde 6/7, ayrı ve henüz
     onaylanmamış özellikler).
+
+    **Ek karar — Ev ↔ Yemek bağlam kuralı (2026-09-01, kullanıcıyla
+    netleştirildi — yeniden tartışılmadan korunmalı):** gerçek bir kullanım
+    vakasında "dün spor sonrası atıştırmalık aldım 105tl" mesajı yanlışlıkla
+    `tür=Ev` olarak kaydedildi. Kök sebep: "Ev" tanımı market/gıda
+    alışverişini genel olarak kapsıyordu ve `KARIŞABİLEN KATEGORİLER`
+    listesinde Ev↔Yemek çifti hiç yoktu, "Spor" ise kasıtlı olarak
+    ekipman/üyelik/ders ücretiyle sınırlı (gıda kapsamıyor, bu değişmedi).
+    Kullanıcı **bağlam bazlı** bir kural istedi (Yemek↔Cafe'deki "mekan
+    bazlı karar" desenine benzer): dışarıdayken/bir aktivite sırasında ya da
+    sonrasında anlık tüketmek için alınan atıştırmalık/içecek → Yemek;
+    markette toplu/stoklamak amacıyla alınan gıda → Ev (değişmedi). Bu kural
+    `Config.js > KATEGORILER` (Ev'in yeni `kapsamaz`'ı, Yemek'in genişletilen
+    `kapsar`/`kapsamaz`'ı) ve `Main.js > SYSTEM_INSTRUCTION_TEMPLATE`'e
+    (KARIŞABİLEN KATEGORİLER'e yeni madde + iki yeni ÖRNEK satırı) işlendi.
 12. **Taksitli harcama ayrıştırma** — kullanıcının açık isteği
     (2026-08-31). **UYGULANDI:** `Config.js > TOOLS`'a `taksitliHarcamaEkle`
     fonksiyonu eklendi (`tutar`, `tutarTipi` enum `["TOPLAM","TAKSIT_BASI"]`,
