@@ -83,14 +83,21 @@ const KATEGORILER = [
     kapsar:
       "Ev eşyası, mobilya, ev tadilat/bakım harcamaları ve market/gıda " +
       'alışverişi (market alışverişinde malzeme alanına "Market" yazılır).',
+    kapsamaz:
+      "Dışarıdayken veya bir aktivite sırasında/sonrasında anlık tüketim " +
+      "amacıyla alınan atıştırmalık/içecek (bkz. Yemek).",
   },
   {
     ad: "Yemek",
     anahtar: "YEMEK",
-    kapsar: "Dışarıda yenilen veya sipariş edilen yemekler.",
+    kapsar:
+      "Dışarıda yenilen veya sipariş edilen yemekler. Dışarıdayken/bir " +
+      "aktivite sırasında veya sonrasında anlık tüketim amacıyla alınan " +
+      "atıştırmalık/içecek de buraya girer.",
     kapsamaz:
       "Kafede yenilen/içilen her şey; mekan kafeyse ürün ne olursa olsun " +
-      "kategori Cafe'dir.",
+      "kategori Cafe'dir. Markette toplu/stoklamak amacıyla alınan gıda " +
+      "(bkz. Ev).",
   },
   {
     ad: "Cafe",
