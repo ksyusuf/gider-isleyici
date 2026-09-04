@@ -14,7 +14,7 @@ git komutları konusunda yöneticinin açık istekleri olmadan işlem yapma.
 
 ## Ne yapıldı
 
-- Kod, sorumluluklarına göre 3 dosyaya bölündü (Apps Script'te tüm dosyalar
+- Kod, sorumluluklarına göre 4 dosyaya bölündü (Apps Script'te tüm dosyalar
   aynı global scope'u paylaştığı için fonksiyon adları dosyalar arası
   sorunsuz erişilebilir — fonksiyon bildirimleri proje genelinde hoisted
   olur):
@@ -28,6 +28,9 @@ git komutları konusunda yöneticinin açık istekleri olmadan işlem yapma.
     entegrasyonu, `update_id` bazlı dedup (`isYeniUpdate_`) ve `doPost`
     webhook giriş noktası, geliştirici yardımcı fonksiyonları
     (`kurulumWebhook`, `webhookDurumu`, `webhookSil`).
+  - `Queue.js`: Fitness projesiyle paylaşılan Telegram mesaj kuyruğu
+    (`kuyrugaEkle_`, bkz. aşağıdaki "Fitness projesiyle paylaşılan Telegram
+    mesaj kuyruğu" bölümü).
 - Sheets sütun sözleşmesi repo kökündeki `services/SheetsGoogle.py`'den
   (eski Python/Flask akışı) tespit edildi: `D=TARİH, E=TUTAR, F=FİRMA, G=TÜR,
 H=MALZEME, I=AÇIKLAMA`, veri `D3`'ten başlıyor, her eklemede TARİH'e göre
@@ -178,6 +181,58 @@ Bedeli:
 
 Referans: [Telegram Bot API](https://core.telegram.org/bots/api),
 [GramIO getUpdates](https://gramio.dev/telegram/methods/getupdates).
+
+## Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (2026-09-04)
+
+**Problem:** Bu bot (`gider-isleyici`) ile ayrı bir Apps Script projesi olan
+`Fitness` AYNI Telegram bot token'ını paylaşıyor. Fitness kendi tetikleyicisinde
+(günde 3 kez) doğrudan Telegram `getUpdates` çağırıyordu. Ama Telegram bir bota
+aynı anda hem webhook hem `getUpdates` polling kullanılmasına izin vermiyor
+("This method will not work if an outgoing webhook is set up" — bkz. yukarıdaki
+"Plan B" bölümü, resmi dokümantasyondan doğrulandı). Bu webhook burada aktif
+olduğu için Fitness'in `getUpdates` çağrısı hep `ok:false` dönüyordu; Fitness'in
+kodu bunu sessizce yutuyordu (hiçbir log yok), yani kullanıcının Fitness'e
+yönelik mesajları (örn. "off") hiç işlenmemiş gibi kayboluyordu. Gerçek bir
+vakada doğrulandı: kullanıcı bir "off" mesajı gönderdi, Fitness'in bir sonraki
+tetikleyicisi bunu hiç görmedi, gün yanlışlıkla ACTIVE kaydedildi.
+
+**Çözüm (`Queue.js`):** `setWebhook` kaldırılmadı, bu proje Telegram'ın TEK
+tüketicisi olarak kaldı (Fitness'i de webhook'a taşımak ayrıca değerlendirildi
+ve reddedildi — Telegram bir bota birden fazla webhook kaydına izin vermiyor,
+`setWebhook` ikinci çağrıda öncekini SESSİZCE değiştirir, bu da hangi projenin
+kazanacağı deploy sırasına bağlı, daha da öngörülemez bir "race condition"
+yaratırdı). Bunun yerine `doPost`, mesaj başarıyla parse edildikten hemen sonra
+(satır ~636, `/` komut kontrolünden ÖNCE) `kuyrugaEkle_(update.update_id,
+chatId, text, message.date)` çağırır — bu, harcama/spor konusu fark etmeksizin
+her metin mesajını `getTargetSpreadsheet_()`'in döndürdüğü spreadsheet'teki
+`telegram_queue` sekmesine (`update_id, chat_id, text, date` kolonları) ham
+olarak ekler. Hiçbir sınıflandırma yapılmaz — kuyruk yazımı bilinçli olarak
+"dümdüz" tutuldu, çünkü Fitness zaten kendi `tekMesajiIsle` fonksiyonunda
+off/blok içermeyen mesajları sessizce eleyen bir filtreye sahip.
+
+Fitness tarafında `yeniTelegramMesajlariniGetir` artık Telegram'a hiç
+gitmiyor; `CONFIG.queueSpreadsheetId` (Script Properties: `QUEUE_SPREADSHEET_ID`)
+ile bu sekmeyi okuyor. Kendi `update_id` cursor + today/yesterday/stale
+etiketleme mantığı DEĞİŞMEDİ — sadece veri kaynağı değişti. Aynı tetikleyici
+aralığında birden fazla farklı niyetli mesaj (örn. "bugün off" + ayrı bir
+mesajda "yarın hacim") de desteklenir: Fitness zaten TÜM yeni mesajları
+`update_id` sırasıyla tek tek işliyordu (sadece sonuncusunu almıyordu), bu
+davranış veri kaynağı değişse de korunur.
+
+**Kurulum adımı (bir kez, elle):** Bu proje deploy edildikten sonra Apps
+Script editöründen `kuyrukSpreadsheetIdYazdir()` çalıştırılıp döndürdüğü ID,
+Fitness projesinin Script Properties'ine `QUEUE_SPREADSHEET_ID` olarak
+girilmeli. Fitness `SpreadsheetApp.openById()` ile bu spreadsheet'i (kendi
+container-bound sheet'inden AYRI, harici bir spreadsheet olarak) açtığı için
+Fitness'in bir sonraki çalıştırmasında yeni bir Google OAuth izin ekranı
+çıkabilir (daha geniş Sheets erişim kapsamı gerekir) — normal, kabul edilmeli.
+
+**Açık nokta (bilinçli olarak ertelendi):** Bu bot "off" gibi fitness-amaçlı
+metinleri de Gemini'ye gönderip muhtemelen bir netleştirme cevabı döndürüyor
+olabilir (kullanıcı için gereksiz ikinci bir bot cevabı). Kuyruk çözümü mesaj
+KAYBINI giderir ama bu "yanlış bota cevap" gürültüsünü gidermez; istenirse
+ileride bu projeye de hafif bir "muhtemelen bana ait değil" kısayolu
+eklenebilir.
 
 **Henüz yapılmadı / açık:**
 - O 4 execution prod tabloya mükerrer satır yazmış olabilir. `❓ Netleştirilmesi
