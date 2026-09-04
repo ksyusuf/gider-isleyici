@@ -9,6 +9,7 @@
  * İlgili diğer dosyalar:
  *   - Config.js: CONFIG, SHEET_LAYOUT, TOOLS (Gemini function declarations)
  *   - Expenses.js: Sheets erişim yardımcıları + harcamaEkle / sonHarcamalariGetir / sonHarcamalariTopla
+ *   - Queue.js: Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (kuyrugaEkle_)
  *
  * Bölümler:
  *   1. FUNCTION_MAP — Gemini fonksiyon adı → gerçek implementasyon eşlemesi
@@ -633,6 +634,12 @@ function doPost(e) {
       );
       return respondOk_();
     }
+
+    // Bu chat'ten gelen HER metin mesajı (komutlar dahil), konusu fark
+    // etmeksizin Fitness projesiyle paylaşılan kuyruğa da yazılır — bkz.
+    // Queue.js. Fitness kendi off/blok filtresiyle kendine ait olmayanları
+    // zaten eliyor; burada hiçbir sınıflandırma yapılmaz.
+    kuyrugaEkle_(update.update_id, chatId, text, message.date);
 
     // `/` ile başlayan komutlar Gemini'ye hiç gitmeden burada, deterministik
     // olarak işlenir (bkz. islemKomut_ ve apps-script/CLAUDE.md madde 2).
