@@ -1,18 +1,3 @@
-# Sensitive keys
-keys/
-gereksizler/
-
-# Python artifacts
-__pycache__/
-*.py[cod]
-*.pyo
-
-# Virtual environments
-.env
-.env.production
-.venv
-venv/
-
 # Logs
 *.log
 
