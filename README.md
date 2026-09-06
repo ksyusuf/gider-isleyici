@@ -1,143 +1,134 @@
-# Gider İşleyici
+# gider-isleyici — Telegram Harcama Botu
 
-Basit bir kişisel proje: Google Docs üzerinden girilen gider kalemlerini
-web arayüzünde görüntüleyip onayladıktan sonra Google Sheets'e düzenli
-şekilde aktaran hafif bir iş akışı sağlar.
+`gider-isleyici`, Google Apps Script tabanlı bir Telegram harcama botudur.
+Telegram'a Türkçe doğal dille yazılan harcama mesajları Gemini function
+calling ile ayrıştırılıp, bu Apps Script projesinin bağlı olduğu Google
+Sheets tablosuna doğrudan yazılır.
 
-## Öne Çıkan Özellikler
+## Gerekli Script Properties
 
-- Google Docs üzerinde oluşturulan gider girdilerini okuma
-- Web arayüzü üzerinden giderleri görüntüleme ve teyit etme
-- Onaylanan girdileri tarih sıralı olarak Google Sheets'e kaydetme
-- Sheet içinde analiz edilebilecek şekilde veri düzenleme
+Apps Script editöründe **Project Settings → Script Properties** kısmından
+ekleyin:
 
-## Çalışma Mantığı
-
-1. Gider kalemleri Google Docs'a girilir.
-2. Uygulama Docs içeriğini web arayüzünde listeler.
-3. Kullanıcı görüntüleyip giderleri teyit eder.
-4. Onaylanan veriler Google Sheets'e aktarılır ve tarih sıralamasına göre düzenlenir.
-
-Hatalı formatlı girdiler otomatik olarak işlenmez; bu tür veriler
-görüntüleme/kaydetme aşamalarında beklemede kalabilir ve kullanıcı müdahalesi
-gerektirebilir.
+| Anahtar               | Zorunlu                       | Açıklama                                                                                                                                                |
+| --------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GEMINI_API_KEY`      | ✅                            | Google AI Studio / Gemini API anahtarı                                                                                                                  |
+| `TELEGRAM_TOKEN`      | ✅                            | BotFather'dan alınan bot token'ı                                                                                                                        |
+| `CHAT_ID`             | önerilir                      | Botu kullanacak kişinin Telegram chat id'si. Boş bırakılırsa **herkes** webhook URL'ine mesaj gönderip botu kullanabilir                                |
+| `TEST_MODE`           | opsiyonel                     | `"true"` verilirse prod tablo yerine `TEST_SPREADSHEET_ID` kullanılır                                                                                   |
+| `TEST_SPREADSHEET_ID` | `TEST_MODE=true` iken zorunlu | Test/kopya spreadsheet ID'si                                                                                                                            |
+| `SHEET_NAME`          | opsiyonel                     | Belirli bir sayfa (tab) adı; boşsa spreadsheet'teki ilk sayfa kullanılır                                                                                |
+| `WEBAPP_URL`          | önerilir                      | Deploy sonrası **Manage deployments**'tan kopyaladığınız `/exec` URL'i. `kurulumWebhook()`'un doğru URL'i kullanmasını garantiler (bkz. Kurulum adım 4) |
 
 ## Kurulum
 
-1. Depoyu klonlayın.
-2. Sanal ortam oluşturup aktif edin (önerilir).
-3. Gerekli paketleri yükleyin:
+1. Bu repoyu bir Apps Script projesine bağlayın:
 
-```
-pip install -r requirements.txt
-```
+   ```bash
+   cp .clasp.json.example .clasp.json
+   # .clasp.json içindeki scriptId'yi kendi Apps Script projenizle değiştirin
+   clasp push
+   ```
 
-4. Google API kimlik bilgilerinizi ayarlayın. Projede `keys/` dizini örnek
-kimlik dosyaları içerir; isterseniz `.env` dosyası içinde veya doğrudan
-uygulama ayarlarında bu yolları belirtin.
+2. Yukarıdaki Script Properties'i girin.
+3. Apps Script editöründen **Deploy → New deployment → Web app** seçip
+   `Execute as: Me`, `Who has access: Anyone` ayarlarıyla deploy edin.
+4. Editörden `kurulumWebhook` fonksiyonunu bir kez elle çalıştırarak Telegram
+   webhook'unu bu deployment URL'ine bağlayın (loglarda Telegram'ın
+   `{"ok":true, ...}` yanıtını görmelisiniz).
+5. Botu Telegram'dan test edin. Webhook'u kaldırmak isterseniz `webhookSil`
+   fonksiyonunu çalıştırın.
 
-Örnek çevresel değişkenler:
+## Sorun giderme — `webhookDurumu()`
 
-- `GOOGLE_CREDENTIALS_PATH` : Google API yetki dosyası yolu
-- `FLASK_ENV` veya benzeri uygulama konfigürasyonları (varsa)
+Bot **aynı cevabı tekrar tekrar gönderiyorsa** ya da **hiç cevap vermiyorsa**,
+ilk bakılacak yer editörden elle çalıştırılan `webhookDurumu()` fonksiyonudur.
+Telegram'ın `getWebhookInfo` çıktısını loglar; önemli alanlar:
 
-## Kullanım
+| Alan                   | Ne anlama gelir                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `url`                  | Webhook'un bağlı olduğu adres. Boşsa webhook kurulu değil; `/dev` ile bitiyorsa yanlış (anonim çağrılarda 401 verir) |
+| `pending_update_count` | Teslim edilememiş, kuyrukta bekleyen update sayısı. Sıfırdan büyükse teslimat tıkanmış demektir                     |
+| `last_error_message`   | Telegram'ın teslimatı neden başarısız saydığı — yanıt zaman aşımı mı, 2XX olmayan bir yanıt mı                      |
 
-1. Sanal ortamı aktifleştirin.
-2. Uygulamayı çalıştırın (örnek):
+### Tekrar eden mesajlar
 
-```
-python index.py
-```
+Telegram, webhook isteğine 2XX dışı bir yanıt aldığında **aynı update'i üstel
+geri çekilmeyle saatlerce yeniden gönderir**. Bot kendi mesajlarını asla geri
+almaz — tekrar eden mesajların sebebi her zaman budur, bir yankı döngüsü değil.
 
-3. Tarayıcıdan arayüze gidip Google Docs verilerini görüntüleyin,
-   gerekli onayları verip verileri Sheets'e aktarın.
+**Kök sebep ve düzeltmesi:** Apps Script Web App'e gelen POST önce bir Google
+front-end sunucusuna düşer ve `ContentService` çıktısında bu sunucu `302 Found`
+ile yönlendirme yapar. Telegram doğrudan 2XX bekler, redirect'i takip etmez ve
+teslimatı başarısız sayar. Bu yüzden `respondOk_()` **`HtmlService.
+createHtmlOutput()`** kullanır — `ContentService`'e geri dönülmemelidir.
 
-Not: Projede birden fazla potansiyel giriş noktası olabilir (`index.py`,
-`services/main.py` vb.). Kendi kurulumunuza göre uygun olan dosyayı çalıştırın.
+**Savunma katmanı:** `doPost` ayrıca `update_id` bazlı dedup uygular
+(`isYeniUpdate_`, `Main.js`): işlenmiş en yüksek `update_id`, işlemin
+**başında** Script Properties'e (`SON_UPDATE_ID`) yazılır. `update_id` kesin
+artan olduğu için gelen id bu işaretten büyük değilse update sessizce atlanır.
+Süresi dolmaz, büyümez. Yani bir mesaj **en fazla bir kez** işlenir: tek cevap,
+tabloda tek satır.
 
-## Dikkat Edilmesi Gerekenler
+> ⚠️ Bot token'ı değişirse `update_id` sayacı sıfırlanır. Script
+> Properties'ten `SON_UPDATE_ID`'yi **elle silin**, aksi halde yeni botun tüm
+> mesajları "eski" sayılıp atlanır.
 
-- Proje kişisel amaçlıdır; üretim hazırlığı, güvenlik ve hata yakalama
-  mekanizmaları eklenmemiş olabilir.
-- Hatalı formatlı veriler elle düzeltilmeden otomatik işleme alınmayabilir.
+Doğru çalıştığının kanıtı `webhookDurumu()` çıktısıdır: `last_error_message`
+**olmamalı**, `pending_update_count` **0** olmalı. Executions listesinde de bir
+mesaj için tek bir `doPost` görünmelidir.
 
-## Katkıda Bulunma
+### Logları göremiyorum
 
-Küçük iyileştirmeler ve hata düzeltmeleri memnuniyetle kabul edilir. Lütfen
-önce bir issue açıp değişikliklerinizi açıklayın.
+Apps Script, **anonim çağıranlar** tarafından tetiklenen Web App
+execution'larının Cloud günlüklerini, projeye standart bir GCP projesi
+bağlanmadıkça sahibine göstermez. Telegram anonim bir çağıran olduğu için
+Executions listesinde `doPost` satırları **görünür ama açılıp log okunamaz** —
+`Execute as: Me` olması bunu değiştirmez.
 
-## Lisans
+Logları görmek için Project Settings → **Google Cloud Platform (GCP) Project**
+kısmından standart bir GCP projesi bağlayın; ardından loglar Cloud Logging'de
+(Logs Explorer) tam olarak görünür.
 
-Bu proje kişisel kullanım içindir — açık kaynak bir lisans eklemek istiyorsanız
-lütfen uygun lisansı belirtin.
+Bu yapılmadan da doğrulanabilecek iki şey var ve bunlar her zaman görünür:
+execution **sayısı** ve **süreleri**, bir de **durum sütunu** (Tamamlandı /
+Başarısız). Cevapsız kalan bir mesajda durum sütunu tek başına çok şey söyler.
 
-## Test & Debug — Çekirdek Sınıfları Lokal Olarak Çalıştırma
+## Dosya yapısı
 
-Projede çekirdek sınıflar (`GoogleDocs`, `GoogleSheets`, `Kaydedici`) doğrudan
-ilgili modüller çalıştırılarak test edilebilir. Her modül kendi başına
-debug/run desteği içermektedir ve çalışma sırasında proje kökündeki `.env`
-dosyası yüklenir (varsa).
+Kod, sorumluluklarına göre 3 dosyaya ayrılmıştır (Apps Script'te tüm proje
+dosyaları aynı global scope'u paylaşır, dosya sırası önemli değildir):
 
-Gereken temel çevresel değişkenler (örnek isimler proje içinde kullanılıyor):
+| Dosya         | İçerik                                                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `Config.js`   | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini function declarations)                                          |
+| `Expenses.js` | Sheets D:I yazma/okuma/sıralama yardımcıları + `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla`           |
+| `Main.js`     | `FUNCTION_MAP`, Gemini REST entegrasyonu, Telegram entegrasyonu, `update_id` dedup (`isYeniUpdate_`), `doPost` giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil` |
 
-- `JSON` : Service account JSON anahtar dosyasının yolu
-- `DOCUMENT_ID` : Google Docs doküman ID'si
-- `log_docs_id` : Log kaydı için Docs ID (index.py içinde `LOG_DOCS_ID` olarak okunur)
-- `spreadsheet_id` : Google Sheets ID'si
-- `sheet_id` : Sheet içindeki sayfa ID'si (sayısal)
-- `DEBUG` : `True`/`False` — Flask debug modu
-- `PORT` : Uygulama portu (ör. `2000`)
+## Sheets sütun sözleşmesi
 
-Örnek `.env` (proje kökünde `.env` olarak kaydedin):
+`D:I` sütunları → `TARİH, TUTAR, FİRMA, TÜR, MALZEME, AÇIKLAMA`; veri
+`Config.js` içindeki `SHEET_LAYOUT.START_ROW` (varsayılan `3`) satırından
+itibaren yazılır ve her eklemeden sonra tablo TARİH sütununa göre azalan
+sıralanır (en güncel tarih her zaman en üstte). Kendi tablonuz farklı bir
+satır/sütundan başlıyorsa `Config.js` içindeki `SHEET_LAYOUT` sabitini
+güncellemeniz yeterlidir.
 
-```
-JSON=keys/yourkey.json
-DOCUMENT_ID=1aBcDeFgHiJkLmNoPqRs
-log_docs_id=1XxXxXxXxXxXx
-spreadsheet_id=1YyYyYyYyYyYy
-sheet_id=0
-DEBUG=True
-PORT=2000
-```
+## Test modu
 
-Örnek çalıştırma komutları
+`clasp push` sonrası kendi hesabınızda boş bir "test spreadsheet" oluşturup
+ID'sini `TEST_SPREADSHEET_ID`'ye, `TEST_MODE`'u `"true"`'ya ayarlarsanız bot
+gerçek tabloya hiç dokunmadan çalışır. Prod'a almadan önce `TEST_MODE`'u
+kaldırmayı (veya `"false"` yapmayı) unutmayın.
 
-- Flask uygulamasını başlatmak (tam özellikli web arayüzü):
+## clasp.json
 
-```powershell
-venv\Scripts\Activate.ps1
-python index.py
-```
-
-- `GoogleDocs` servisini tek başına test etmek:
-
-```powershell
-venv\Scripts\Activate.ps1
-python services\DocsGoogle.py
-```
-
-- `GoogleSheets` servisini tek başına test etmek (örnek veri yükler):
-
-```powershell
-venv\Scripts\Activate.ps1
-python services\SheetsGoogle.py
-```
-
-- Koordinatör `Kaydedici` sınıfını modül olarak çalıştırmak (bilgilendirici çıktı verir):
-
-```powershell
-venv\Scripts\Activate.ps1
-python services\main.py
-```
-
-Notlar
-
-- Modüllerin doğrudan çalıştırılması (`python services\DocsGoogle.py` vb.)
-  debug amaçlıdır ve önce `.env` içindeki gerekli değişkenlerin ayarlanmasını
-  bekler. Eksik bir değişken varsa ilgili modül bilgilendirici bir uyarı
-  yazdırır.
-- `index.py` uygulama başlatıcısıdır; burada servis örnekleri oluşturulur ve
-  Flask route'lar bağlanır. Lokal testlerde genelde `index.py` kullanmak yeterli
-  olacaktır.
-
+{
+"scriptId": "SCRIPT_ID",
+"rootDir": "",
+"scriptExtensions": [".js", ".gs"],
+"htmlExtensions": [".html"],
+"jsonExtensions": [".json"],
+"filePushOrder": [],
+"skipSubdirectories": false
+}
