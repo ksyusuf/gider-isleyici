@@ -96,14 +96,16 @@ Başarısız). Cevapsız kalan bir mesajda durum sütunu tek başına çok şey 
 
 ## Dosya yapısı
 
-Kod, sorumluluklarına göre 3 dosyaya ayrılmıştır (Apps Script'te tüm proje
+Kod, sorumluluklarına göre 5 dosyaya ayrılmıştır (Apps Script'te tüm proje
 dosyaları aynı global scope'u paylaşır, dosya sırası önemli değildir):
 
 | Dosya         | İçerik                                                                                                                 |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `Config.js`   | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini function declarations)                                          |
 | `Expenses.js` | Sheets D:I yazma/okuma/sıralama yardımcıları + `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla`           |
-| `Main.js`     | `FUNCTION_MAP`, Gemini REST entegrasyonu, Telegram entegrasyonu, `update_id` dedup (`isYeniUpdate_`), `doPost` giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil` |
+| `Main.js`     | `FUNCTION_MAP`, Gemini REST entegrasyonu (+ Katman 1 tekrar deneme), Telegram entegrasyonu, `update_id` dedup (`isYeniUpdate_`), `doPost` giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil` |
+| `Queue.js`    | Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (`kuyrugaEkle_`, `telegram_queue` sekmesi)                        |
+| `Retry.js`    | Gemini geçici/kalıcı hatalarında Katman 2 — mesaj bazlı, tek seferlik trigger'larla saatlik tekrar deneme (`yeniden_deneme_kuyrugu` sekmesi), teşhis: `yenidenDenemeKuyruguDurumu()` |
 
 ## Sheets sütun sözleşmesi
 
