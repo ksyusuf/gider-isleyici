@@ -126,7 +126,9 @@ function retryTumSatirlariOku_(sheet) {
   if (lastRow < 2) {
     return [];
   }
-  var degerler = sheet.getRange(2, 1, lastRow - 1, RETRY_HEADERS.length).getValues();
+  var degerler = sheet
+    .getRange(2, 1, lastRow - 1, RETRY_HEADERS.length)
+    .getValues();
   return degerler.map(function (row, i) {
     return {
       satirNo: i + 2,
@@ -157,19 +159,21 @@ function satiriGuncelle_(sheet, row, alanlar) {
   var guncel = Object.assign({}, row, alanlar);
   sheet
     .getRange(row.satirNo, 1, 1, RETRY_HEADERS.length)
-    .setValues([[
-      guncel.updateId,
-      guncel.chatId,
-      guncel.text,
-      guncel.mesajTarihi,
-      guncel.durum,
-      guncel.denemeAsamasi,
-      guncel.sonrakiDenemeZamani,
-      guncel.ilkHataZamani,
-      guncel.sonDenemeZamani,
-      guncel.sonHataMesaji,
-      guncel.triggerId,
-    ]]);
+    .setValues([
+      [
+        guncel.updateId,
+        guncel.chatId,
+        guncel.text,
+        guncel.mesajTarihi,
+        guncel.durum,
+        guncel.denemeAsamasi,
+        guncel.sonrakiDenemeZamani,
+        guncel.ilkHataZamani,
+        guncel.sonDenemeZamani,
+        guncel.sonHataMesaji,
+        guncel.triggerId,
+      ],
+    ]);
 }
 
 /**
@@ -224,7 +228,10 @@ function eskiKayitlariTemizle_(sheet, simdi) {
     });
 
   silinecekler.forEach(function (row) {
-    log_("yenidenDeneme.fifo-temizlik", { updateId: row.updateId, satirNo: row.satirNo });
+    log_("yenidenDeneme.fifo-temizlik", {
+      updateId: row.updateId,
+      satirNo: row.satirNo,
+    });
     sheet.deleteRow(row.satirNo);
   });
 }
@@ -307,7 +314,13 @@ function zamanliTetikleyiciSil_(triggerId) {
  * @param {number} mesajTarihiSaniye Telegram update.message.date (Unix saniye).
  * @param {string} hataMesaji
  */
-function yenidenDenemeKuyruguEkle_(updateId, chatId, text, mesajTarihiSaniye, hataMesaji) {
+function yenidenDenemeKuyruguEkle_(
+  updateId,
+  chatId,
+  text,
+  mesajTarihiSaniye,
+  hataMesaji,
+) {
   var lock = LockService.getScriptLock();
   lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
   try {
@@ -318,7 +331,9 @@ function yenidenDenemeKuyruguEkle_(updateId, chatId, text, mesajTarihiSaniye, ha
     var ilkAsama = 1;
     var gecikmeSaat = sonrakiGecikmeSaat_(ilkAsama);
     var triggerId = zamanliTetikleyiciKur_(gecikmeSaat);
-    var sonrakiDenemeZamani = new Date(simdi.getTime() + gecikmeSaat * 60 * 60 * 1000);
+    var sonrakiDenemeZamani = new Date(
+      simdi.getTime() + gecikmeSaat * 60 * 60 * 1000,
+    );
 
     sheet.appendRow([
       updateId,
@@ -353,7 +368,13 @@ function yenidenDenemeKuyruguEkle_(updateId, chatId, text, mesajTarihiSaniye, ha
  * @param {number} mesajTarihiSaniye
  * @param {string} hataMesaji
  */
-function pesEdildiKuyruguEkleVeBildir_(updateId, chatId, text, mesajTarihiSaniye, hataMesaji) {
+function pesEdildiKuyruguEkleVeBildir_(
+  updateId,
+  chatId,
+  text,
+  mesajTarihiSaniye,
+  hataMesaji,
+) {
   var lock = LockService.getScriptLock();
   lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
   var sheet, yeniSatirNo;
@@ -376,7 +397,10 @@ function pesEdildiKuyruguEkleVeBildir_(updateId, chatId, text, mesajTarihiSaniye
       "",
     ]);
     yeniSatirNo = sheet.getLastRow();
-    log_("yenidenDeneme.kalici-hata-kuyruklandi", { updateId: updateId, satirNo: yeniSatirNo });
+    log_("yenidenDeneme.kalici-hata-kuyruklandi", {
+      updateId: updateId,
+      satirNo: yeniSatirNo,
+    });
   } finally {
     lock.releaseLock();
   }
@@ -417,7 +441,10 @@ function pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, buSatirNo) {
       .join("\n");
     sendTelegramMessage_(
       chatId,
-      "📋 Ayrıca hâlâ işlenmemiş " + digerPesEdilenler.length + " eski mesaj var:\n" + liste,
+      "📋 Ayrıca hâlâ işlenmemiş " +
+        digerPesEdilenler.length +
+        " eski mesaj var:\n" +
+        liste,
     );
   }
 }
@@ -472,7 +499,10 @@ function zamanlanmisTekrarDenemeyiIsle() {
     // durumu ISLENIYOR yap — Gemini çağrısı kilit DIŞINDA yapılacak.
     vadesiGelenler.forEach(function (row) {
       zamanliTetikleyiciSil_(row.triggerId);
-      satiriGuncelle_(sheet, row, { durum: RETRY_DURUM.ISLENIYOR, sonDenemeZamani: simdiClaim });
+      satiriGuncelle_(sheet, row, {
+        durum: RETRY_DURUM.ISLENIYOR,
+        sonDenemeZamani: simdiClaim,
+      });
       row.durum = RETRY_DURUM.ISLENIYOR;
     });
 
@@ -492,7 +522,10 @@ function zamanlanmisTekrarDenemeyiIsle() {
       );
       sendTelegramMessage_(
         row.chatId,
-        "⏳ Gecikmeli işlendi (" + saatOnce + " saat önce gönderilmişti):\n\n" + cevapMetni,
+        "⏳ Gecikmeli işlendi (" +
+          saatOnce +
+          " saat önce gönderilmişti):\n\n" +
+          cevapMetni,
       );
       // Satır SİLİNMEZ — TAMAMLANDI olarak işaretlenir, yalnızca 5 günlük FIFO
       // temizliği (eskiKayitlariTemizle_) bu durumdaki satırları kaldırır.
@@ -502,20 +535,35 @@ function zamanlanmisTekrarDenemeyiIsle() {
         sonDenemeZamani: simdi,
         triggerId: "",
       });
-      log_("yenidenDeneme.basarili", { updateId: row.updateId, asama: row.denemeAsamasi });
+      log_("yenidenDeneme.basarili", {
+        updateId: row.updateId,
+        asama: row.denemeAsamasi,
+      });
       return;
     } catch (err) {
       // Sınıflandırılmamış/beklenmeyen bir hata da (hataGeciciMi_ default: geçici)
       // "reschedule ya da açıkça pes et" yoluna düşer — asla sessizce silinmez.
       if (!hataGeciciMi_(err)) {
         satiriPesEdildiOlarakIsaretle_(sheet, row, err.message, simdi);
-        pesEdildiBildirimGonder_(sheet, row.chatId, row.text, err.message, row.satirNo);
+        pesEdildiBildirimGonder_(
+          sheet,
+          row.chatId,
+          row.text,
+          err.message,
+          row.satirNo,
+        );
         return;
       }
 
       if (sonAsamaMi_(row.denemeAsamasi)) {
         satiriPesEdildiOlarakIsaretle_(sheet, row, err.message, simdi);
-        pesEdildiBildirimGonder_(sheet, row.chatId, row.text, err.message, row.satirNo);
+        pesEdildiBildirimGonder_(
+          sheet,
+          row.chatId,
+          row.text,
+          err.message,
+          row.satirNo,
+        );
         return;
       }
 
@@ -523,7 +571,9 @@ function zamanlanmisTekrarDenemeyiIsle() {
       try {
         var gecikmeSaat = sonrakiGecikmeSaat_(yeniAsama);
         var yeniTriggerId = zamanliTetikleyiciKur_(gecikmeSaat);
-        var yeniSonrakiZaman = new Date(simdi.getTime() + gecikmeSaat * 60 * 60 * 1000);
+        var yeniSonrakiZaman = new Date(
+          simdi.getTime() + gecikmeSaat * 60 * 60 * 1000,
+        );
         satiriGuncelle_(sheet, row, {
           durum: RETRY_DURUM.BEKLIYOR,
           denemeAsamasi: yeniAsama,
@@ -541,10 +591,143 @@ function zamanlanmisTekrarDenemeyiIsle() {
         logHata_("yenidenDeneme.trigger-kurulamadi-KRITIK", triggerErr);
         var triggerHataMesaji = "Trigger kurulamadı: " + triggerErr.message;
         satiriPesEdildiOlarakIsaretle_(sheet, row, triggerHataMesaji, simdi);
-        pesEdildiBildirimGonder_(sheet, row.chatId, row.text, triggerHataMesaji, row.satirNo);
+        pesEdildiBildirimGonder_(
+          sheet,
+          row.chatId,
+          row.text,
+          triggerHataMesaji,
+          row.satirNo,
+        );
       }
     }
   });
+}
+
+// ============================================================================
+// Komutlar (Main.js > islemKomut_ tarafından çağrılır, Telegram `/pesedilenler`
+// ve `/pesedilenleridene` komutlarının karşılığı)
+// ============================================================================
+
+/**
+ * `/pesedilenler` komutunun çıktısı: kuyruktaki TÜM `PES_EDILDI` satırlarını
+ * (otomatik tekrar denemesi tükenmiş/kalıcı hatayla başarısız kalmış mesajlar)
+ * okunabilir bir listeye çevirir. Gemini'ye hiç gitmez, tamamen deterministik.
+ * @return {string}
+ */
+function pesEdilenleriListele_() {
+  var sheet = getOrCreateRetrySheet_();
+  var simdi = new Date();
+  var pesEdilenler = retryTumSatirlariOku_(sheet).filter(function (row) {
+    return row.durum === RETRY_DURUM.PES_EDILDI;
+  });
+
+  if (pesEdilenler.length === 0) {
+    return "Pes edilmiş mesaj yok. 🎉";
+  }
+
+  var satirlar = pesEdilenler.map(function (row, i) {
+    var ilkHataMs =
+      row.ilkHataZamani instanceof Date
+        ? row.ilkHataZamani.getTime()
+        : new Date(row.ilkHataZamani).getTime();
+    var saatOnce = Math.max(
+      1,
+      Math.round((simdi.getTime() - ilkHataMs) / 3600000),
+    );
+    return (
+      i +
+      1 +
+      ". (" +
+      saatOnce +
+      " saat önce) " +
+      row.text +
+      "\n   Hata: " +
+      row.sonHataMesaji
+    );
+  });
+
+  return (
+    "❌ " +
+    pesEdilenler.length +
+    " pes edilmiş mesaj var — /pesedilenleridene ile topluca tekrar deneyebilirsin:\n\n" +
+    satirlar.join("\n\n")
+  );
+}
+
+/**
+ * `/pesedilenleridene` komutunun çıktısı: kuyruktaki TÜM `PES_EDILDI`
+ * satırlarını, her biri için Katman 1'i (callGeminiIleTekrarDeneme_, en fazla
+ * GEMINI_MAX_DENEME hızlı deneme) kullanarak ŞİMDİ topluca tekrar dener.
+ * Katman 2'ye (yeni trigger kurma) HİÇ girmez — bu SADECE anlık, manuel bir
+ * deneme; hâlâ başarısız kalanlar PES_EDILDI'de kalır (silinmez), sadece
+ * `son_hata_mesaji`/`son_deneme_zamani` güncellenir. Başarılı olanlar
+ * otomatik akışla simetrik şekilde TAMAMLANDI'ya geçer (hemen silinmez,
+ * 5 günlük FIFO'ya bırakılır) — bkz. eskiKayitlariTemizle_.
+ * @return {string} Kullanıcıya gösterilecek özet.
+ */
+function pesEdilenleriTekrarDene_() {
+  var sheet = getOrCreateRetrySheet_();
+  var pesEdilenler = retryTumSatirlariOku_(sheet)
+    .filter(function (row) {
+      return row.durum === RETRY_DURUM.PES_EDILDI;
+    })
+    .sort(function (a, b) {
+      return b.satirNo - a.satirNo; // azalan sırayla işle, index kaymasına karşı savunma
+    });
+
+  if (pesEdilenler.length === 0) {
+    return "Pes edilmiş mesaj yok, tekrar denenecek bir şey bulunamadı.";
+  }
+
+  var basarili = [];
+  var basarisiz = [];
+
+  pesEdilenler.forEach(function (row) {
+    var simdi = new Date();
+    try {
+      var mesajZamaniSaniye = Math.floor(row.mesajTarihi.getTime() / 1000);
+      var cevapMetni = mesajiIsleVeYanitla_(row.text, mesajZamaniSaniye);
+      satiriGuncelle_(sheet, row, {
+        durum: RETRY_DURUM.TAMAMLANDI,
+        sonHataMesaji: "",
+        sonDenemeZamani: simdi,
+      });
+      basarili.push({ text: row.text, cevap: cevapMetni });
+    } catch (err) {
+      satiriGuncelle_(sheet, row, {
+        sonHataMesaji: err.message,
+        sonDenemeZamani: simdi,
+      });
+      basarisiz.push({ text: row.text, hata: err.message });
+    }
+  });
+
+  var bloklar = [];
+  if (basarili.length > 0) {
+    bloklar.push(
+      "✅ " +
+        basarili.length +
+        " mesaj başarıyla işlendi:\n" +
+        basarili
+          .map(function (b, i) {
+            return i + 1 + ". " + b.text + "\n   " + b.cevap;
+          })
+          .join("\n\n"),
+    );
+  }
+  if (basarisiz.length > 0) {
+    bloklar.push(
+      "❌ " +
+        basarisiz.length +
+        " mesaj hâlâ başarısız, PES_EDILDI'de kaldı:\n" +
+        basarisiz
+          .map(function (b, i) {
+            return i + 1 + ". " + b.text + "\n   Hata: " + b.hata;
+          })
+          .join("\n\n"),
+    );
+  }
+  return bloklar.join("\n\n");
 }
 
 // ============================================================================
@@ -589,9 +772,11 @@ function yenidenDenemeKuyruguDurumu() {
     return acc === null || t < acc ? t : acc;
   }, null);
 
-  var kayitliTriggerSayisi = ScriptApp.getProjectTriggers().filter(function (t) {
-    return t.getHandlerFunction() === RETRY_HANDLER_FN_ADI;
-  }).length;
+  var kayitliTriggerSayisi = ScriptApp.getProjectTriggers().filter(
+    function (t) {
+      return t.getHandlerFunction() === RETRY_HANDLER_FN_ADI;
+    },
+  ).length;
 
   var ozet = {
     toplamSatir: satirlar.length,
@@ -600,7 +785,9 @@ function yenidenDenemeKuyruguDurumu() {
     pesEdilen: pesEdilen.length,
     tamamlanan: tamamlanan.length,
     enEskiIlkHataSaatOnce:
-      enEskiMs === null ? null : Math.round((simdi.getTime() - enEskiMs) / 3600000),
+      enEskiMs === null
+        ? null
+        : Math.round((simdi.getTime() - enEskiMs) / 3600000),
     kayitliTriggerSayisi: kayitliTriggerSayisi,
   };
   Logger.log(JSON.stringify(ozet));

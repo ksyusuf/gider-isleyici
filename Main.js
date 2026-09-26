@@ -135,7 +135,7 @@ const SYSTEM_INSTRUCTION_TEMPLATE = [
   "- Yemek ↔ Cafe: mekan bazlı karar — mekan kafeyse ürün ne olursa olsun Cafe.",
   "- Ev ↔ Yemek (gıda alımı): bağlam bazlı karar — dışarıdayken/bir aktivite",
   "  sırasında ya da sonrasında anlık tüketmek için alınan atıştırmalık/içecek",
-  '  → Yemek; markette toplu/stoklamak amacıyla alınan gıda → Ev (malzeme',
+  "  → Yemek; markette toplu/stoklamak amacıyla alınan gıda → Ev (malzeme",
   '  alanına "Market" yaz).',
   "- Fatura ↔ Dijital: sağlayıcı tipi bazlı — altyapı/hat sağlayıcısı → Fatura;",
   "  içerik/yazılım platformu → Dijital.",
@@ -318,7 +318,9 @@ function callGemini_(userText, mesajZamaniSaniye) {
   log_("gemini.yanit", { http: statusCode, sureMs: sureMs, govde: govde });
 
   if (statusCode !== 200) {
-    var httpHata = new Error("Gemini API hatası (HTTP " + statusCode + "): " + govde);
+    var httpHata = new Error(
+      "Gemini API hatası (HTTP " + statusCode + "): " + govde,
+    );
     httpHata.httpStatus = statusCode; // hataGeciciMi_'nin geçici/kalıcı ayrımı için
     httpHata.httpBody = govde; // hataYuksekTalepMi_'nin "UNAVAILABLE" tespiti için
     throw httpHata;
@@ -413,7 +415,12 @@ function hataYuksekTalepMi_(err) {
  * @param {Array<number>} gecikmelerMs maxDeneme-1 uzunluğunda, denemeler arası bekleme (ms).
  * @return {Array<Object>} candidates[0].content.parts dizisi.
  */
-function callGeminiIleTekrarDeneme_(userText, mesajZamaniSaniye, maxDeneme, gecikmelerMs) {
+function callGeminiIleTekrarDeneme_(
+  userText,
+  mesajZamaniSaniye,
+  maxDeneme,
+  gecikmelerMs,
+) {
   var sonHata;
   for (var i = 0; i < maxDeneme; i++) {
     try {
@@ -472,7 +479,10 @@ function sendTelegramMessage_(chatId, text) {
 
   if (statusCode !== 200) {
     console.error(
-      "[telegram.HATA] sendMessage başarısız (HTTP " + statusCode + "): " + govde,
+      "[telegram.HATA] sendMessage başarısız (HTTP " +
+        statusCode +
+        "): " +
+        govde,
     );
   }
 }
@@ -517,6 +527,8 @@ const KOMUT_LISTESI_METNI = [
   "Kullanılabilir komutlar:",
   "/son [N] — son N harcamayı listeler (belirtilmezse 5).",
   "/toplam [N] — son N harcamanın toplamını hesaplar (belirtilmezse 5).",
+  "/pesedilenler — otomatik tekrar denemesi tükenmiş (pes edilmiş) mesajları listeler.",
+  "/pesdene — pes edilmiş TÜM mesajları şimdi topluca tekrar dener.",
   "/komutlar — bu listeyi gösterir.",
 ].join("\n");
 
@@ -525,6 +537,10 @@ const KOMUT_LISTESI_METNI = [
  * sıfır Gemini API maliyeti/gecikmesi, tamamen deterministik (bkz.
  * apps-script/CLAUDE.md madde 2). Tanınmayan komutlar bir hata mesajı +
  * komut listesiyle karşılanır.
+ *
+ * İSTİSNA: `/pesdene` (Retry.js) bu "Gemini'ye hiç gitmez"
+ * prensibinin dışındadır — pes edilmiş mesajları topluca yeniden Gemini'ye
+ * göndererek tekrar dener (kullanıcının açık isteğiyle, manuel bir işlemdir).
  * @param {string} text Kullanıcının `/` ile başlayan tam mesajı.
  * @return {string} Telegram'a gönderilecek yanıt.
  */
@@ -540,6 +556,12 @@ function islemKomut_(text) {
   }
   if (komut === "/toplam") {
     return sonHarcamalariTopla({ adet: normalizeAdet_(argument) });
+  }
+  if (komut === "/pesedilenler") {
+    return pesEdilenleriListele_();
+  }
+  if (komut === "/pesdene") {
+    return pesEdilenleriTekrarDene_();
   }
   if (komut === "/komutlar") {
     return KOMUT_LISTESI_METNI;
@@ -587,7 +609,9 @@ function islemSonuclariniBirlestir_(parts) {
     // Burada en az bir harcama başarıyla eklendi; kalan metin parçaları
     // gerçekten "bu kalem için netleştirme gerekiyor" anlamına gelir (bkz.
     // systemInstruction > ZORUNLU NETLİK KURALI, kısmi ekleme senaryosu).
-    bloklar.push("❓ Netleştirilmesi gerekenler:\n" + metinParcalari.join("\n"));
+    bloklar.push(
+      "❓ Netleştirilmesi gerekenler:\n" + metinParcalari.join("\n"),
+    );
   }
 
   return bloklar.join("\n\n");
@@ -717,7 +741,10 @@ function doPost(e) {
       // Web App URL'i herkese açık (ANYONE_ANONYMOUS). Telegram dışından gelen
       // tarama/probe istekleri JSON.parse hatasına düşüp catch bloğu üzerinden
       // kullanıcıya gereksiz hata mesajı göndermesin diye sessizce yok sayılır.
-      log_("doPost.gecersiz-istek", "postData yok — Telegram dışı istek, yok sayıldı.");
+      log_(
+        "doPost.gecersiz-istek",
+        "postData yok — Telegram dışı istek, yok sayıldı.",
+      );
       return respondOk_();
     }
 
