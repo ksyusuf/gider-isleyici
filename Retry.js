@@ -45,15 +45,24 @@
  * girmiştir.
  *
  * **Silme kuralı (kullanıcı onayı, 2026-09-26):** Fitness günde 3 kez çalışıp
- * SADECE aynı günün mesajlarıyla ilgilendiği için 5 günden eski satırların
- * silinmesi Fitness için sorun DEĞİL — bu yüzden `eskiKayitlariTemizle_`
- * `durum` boş (retry'a hiç girmemiş, ilk denemede başarılı olmuş sıradan
- * mesajlar) ya da `TAMAMLANDI` olan ve 5 günden eski satırları TAMAMEN SİLER
- * (`sheet.deleteRow`). Tek istisna, HİÇBİR ZAMAN silinmeyen iki durum:
+ * SADECE aynı günün mesajlarıyla ilgilendiği için RETRY_TEMIZLIK_ESIK_MS'i
+ * aşan eski satırların silinmesi Fitness için sorun DEĞİL — bu yüzden
+ * `eskiKayitlariTemizle_` `durum` boş (retry'a hiç girmemiş, ilk denemede
+ * başarılı olmuş sıradan mesajlar) ya da `TAMAMLANDI` olan ve o eşiği aşan
+ * satırları TAMAMEN SİLER (`sheet.deleteRow`). Tek istisna, HİÇBİR ZAMAN
+ * silinmeyen iki durum:
  * `BEKLIYOR`/`ISLENIYOR` (hâlâ aktif iş) ve `PES_EDILDI` (kullanıcının haberdar
  * olması gereken, hiçbir yere kaydedilmemiş bir harcama) — bunlar yaşı ne
  * olursa olsun dokunulmaz, çünkü bir harcamayı sessizce unutmak/kaybetmek
  * kabul edilemez (kullanıcı kararı, Fitness'ten bağımsız).
+ *
+ * Temizlik, `zamanlanmisTekrarDenemeyiIsle`/`yenidenDenemeKuyruguEkle_`/
+ * `pesEdildiKuyruguEkleVeBildir_`'e EK OLARAK `Queue.js > kuyrugaEkle_`'den
+ * de (kilitli sarmalayıcı `eskiKayitlariTemizleKilitli_` ile) çağrılır — bu
+ * fonksiyon HER metin mesajında (Gemini başarılı olsun olmasın) çalıştığı
+ * için, Gemini hiç hata vermese bile temizlik düzenli fırsat bulur (sürekli
+ * bir trigger kurmadan, 2026-09-26 kullanıcı kararı — aksi halde ilk temizlik
+ * ancak ilk Gemini hatasında tetiklenirdi).
  *
  * İlgili diğer dosyalar:
  *   - Queue.js: QUEUE_HEADERS/getOrCreateQueueSheet_/kuyrugaEkle_ (paylaşılan
@@ -91,8 +100,8 @@ const RETRY_LOCK_TIMEOUT_MS = 10000;
 /** Aynı anda birden fazla mesajın vadesi gelirse tek bir trigger ateşlenişinde işlenecek üst sınır. */
 const RETRY_MAX_SATIR_PER_TETIKLEME = 5;
 
-/** FIFO temizlik eşiği: ilk_hata_zamani'ndan itibaren bu süreyi aşan TAMAMLANDI satırların E:K'sı boşaltılır. */
-const RETRY_TEMIZLIK_ESIK_MS = 5 * 24 * 60 * 60 * 1000; // 5 gün
+/** FIFO temizlik eşiği: `date`'ten itibaren bu süreyi aşan durum=""/TAMAMLANDI satırlar silinir. */
+const RETRY_TEMIZLIK_ESIK_MS = 10 * 24 * 60 * 60 * 1000; // 10 gün
 
 // ============================================================================
 // Kuyruk (telegram_queue, Queue.js) satır okuma/yazma yardımcıları
@@ -215,11 +224,11 @@ function satiriPesEdildiOlarakIsaretle_(sheet, row, hataMesaji, simdi) {
 }
 
 /**
- * `date` (mesajTarihi) sütunundan itibaren RETRY_TEMIZLIK_ESIK_MS'i (5 gün)
- * aşan satırları SİLER — hem `durum` boş (retry'a hiç girmemiş, ilk denemede
+ * `date` (mesajTarihi) sütunundan itibaren RETRY_TEMIZLIK_ESIK_MS'i aşan
+ * satırları SİLER — hem `durum` boş (retry'a hiç girmemiş, ilk denemede
  * başarılı olmuş sıradan mesajlar) hem `TAMAMLANDI` (gecikmeli de olsa
  * başarıyla işlenmiş) satırlar bu kapsamdadır. Fitness günde 3 kez çalışıp
- * sadece aynı günün mesajlarıyla ilgilendiği için 5 günlük geçmişi hiç
+ * sadece aynı günün mesajlarıyla ilgilendiği için bu eşiği aşan geçmişi hiç
  * kullanmıyor — bu yüzden gerçek satır silme Fitness için güvenli (kullanıcı
  * onayı, 2026-09-26).
  *
@@ -228,10 +237,13 @@ function satiriPesEdildiOlarakIsaretle_(sheet, row, hataMesaji, simdi) {
  * olursa olsun ASLA silinmez — bir harcamayı sessizce unutmak/kaybetmek kabul
  * edilemez (kullanıcı kararı, bu iki durum için Fitness'ten bağımsız).
  *
- * Ayrı bir periyodik trigger YOK (kullanıcı kararı); bu yüzden bu fonksiyon
- * zaten var olan giriş noktalarının (yenidenDenemeKuyruguEkle_,
+ * Ayrı bir periyodik trigger YOK (kullanıcı kararı); bu fonksiyon retry'a
+ * özel üç giriş noktasının (yenidenDenemeKuyruguEkle_,
  * pesEdildiKuyruguEkleVeBildir_, zamanlanmisTekrarDenemeyiIsle) başında ucuz
- * bir ilk-adım olarak çağrılır.
+ * bir ilk-adım olarak çağrılır VE (kilitli sarmalayıcısı
+ * eskiKayitlariTemizleKilitli_ üzerinden) `Queue.js > kuyrugaEkle_`'den HER
+ * mesajda çağrılır — böylece Gemini hiç hata vermese bile temizlik düzenli
+ * fırsat bulur.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {Date} simdi
  */
@@ -260,6 +272,32 @@ function eskiKayitlariTemizle_(sheet, simdi) {
     log_("yenidenDeneme.fifo-temizlik", { updateId: row.updateId, satirNo: row.satirNo });
     sheet.deleteRow(row.satirNo);
   });
+}
+
+/**
+ * `eskiKayitlariTemizle_`'yi LockService ile korunan kısa bir kritik bölümde
+ * çalıştırır — diğer üç giriş noktasıyla (yenidenDenemeKuyruguEkle_,
+ * pesEdildiKuyruguEkleVeBildir_, zamanlanmisTekrarDenemeyiIsle) AYNI kilidi
+ * kullanır, böylece aynı anda iki temizliğin çakışıp satır numaralarını
+ * bozması önlenir. `Queue.js > kuyrugaEkle_` tarafından HER mesajda çağrılır
+ * (Gemini başarılı olsun olmasın) — Gemini hiç hata vermese bile temizliğin
+ * düzenli fırsat bulmasını garanti eder, sürekli bir trigger kurmadan
+ * (2026-09-26 kullanıcı kararı).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ */
+function eskiKayitlariTemizleKilitli_(sheet) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
+  } catch (err) {
+    logHata_("yenidenDeneme.temizlik-kilit-alinamadi", err);
+    return;
+  }
+  try {
+    eskiKayitlariTemizle_(sheet, new Date());
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ============================================================================
@@ -593,9 +631,9 @@ function zamanlanmisTekrarDenemeyiIsle() {
           " saat önce gönderilmişti):\n\n" +
           cevapMetni,
       );
-      // Satır SİLİNMEZ — TAMAMLANDI olarak işaretlenir, yalnızca 5 günlük FIFO
-      // temizliği (eskiKayitlariTemizle_) bu durumdaki satırların E:K'sını
-      // (A:D DEĞİL) boşaltır.
+      // Satır burada SİLİNMEZ — TAMAMLANDI olarak işaretlenir, ancak FIFO
+      // temizliği (eskiKayitlariTemizle_, eşik: RETRY_TEMIZLIK_ESIK_MS) bu
+      // durumdaki satırı süresi dolunca tamamen siler.
       satiriGuncelle_(sheet, row, {
         durum: RETRY_DURUM.TAMAMLANDI,
         sonHataMesaji: "",
@@ -728,8 +766,8 @@ function pesEdilenleriListele_() {
  * trigger kurma) HİÇ girmez — bu SADECE anlık, manuel bir deneme; hâlâ
  * başarısız kalanlar PES_EDILDI'de kalır (silinmez), sadece
  * `son_hata_mesaji`/`son_deneme_zamani` güncellenir. Başarılı olanlar
- * otomatik akışla simetrik şekilde TAMAMLANDI'ya geçer (silinmez, 5 günlük
- * FIFO'ya bırakılır) — bkz. eskiKayitlariTemizle_.
+ * otomatik akışla simetrik şekilde TAMAMLANDI'ya geçer (burada silinmez,
+ * FIFO temizliğine bırakılır) — bkz. eskiKayitlariTemizle_.
  * @return {string} Kullanıcıya gösterilecek özet.
  */
 function pesEdilenleriTekrarDene_() {

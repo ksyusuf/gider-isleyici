@@ -102,6 +102,13 @@ function getOrCreateQueueSheet_() {
  * Bu çağrı SADECE A:D'yi doldurur (E:K, yani retry bookkeeping, bilerek boş
  * bırakılır) — mesaj Gemini'de başarısız olursa Retry.js bu AYNI satırı
  * update_id ile bulup E:K'yı sonradan doldurur, yeni bir satır EKLEMEZ.
+ *
+ * Satır eklendikten sonra `Retry.js > eskiKayitlariTemizleKilitli_` çağrılır
+ * — bu, `RETRY_TEMIZLIK_ESIK_MS`'i aşan (ve retry'a hiç girmemiş/TAMAMLANDI)
+ * satırların temizliğinin HER mesajda bir fırsat bulmasını sağlar. Aksi
+ * halde temizlik SADECE bir Gemini hatası olduğunda tetiklenirdi — Gemini
+ * hiç hata vermezse hiç çalışmazdı (2026-09-26 kararı, bkz. Retry.js dosya
+ * başı yorumu).
  * @param {number} updateId
  * @param {number|string} chatId
  * @param {string} text
@@ -112,6 +119,7 @@ function kuyrugaEkle_(updateId, chatId, text, dateSaniye) {
     var sheet = getOrCreateQueueSheet_();
     sheet.appendRow([updateId, chatId, text, new Date(dateSaniye * 1000)]);
     log_("kuyruk.eklendi", { updateId: updateId });
+    eskiKayitlariTemizleKilitli_(sheet);
   } catch (err) {
     logHata_("kuyruk.HATA", err);
   }
