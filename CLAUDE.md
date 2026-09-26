@@ -215,6 +215,13 @@ Referans: [Telegram Bot API](https://core.telegram.org/bots/api),
 
 ## Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (2026-09-04)
 
+> **Güncelleme (2026-09-26):** Bu sekmenin şeması genişletildi — `Retry.js`
+> (Katman 2 tekrar deneme) kendi sekmesini AÇMAK YERİNE bu `telegram_queue`
+> sekmesine E:K kolonları ekledi (kullanıcı kararı). A:D (aşağıdaki
+> `QUEUE_HEADERS`in ilk 4 elemanı) Fitness için DEĞİŞMEDEN sabit kalıyor;
+> detay için aşağıdaki "Gemini API geçici/kalıcı hatalarına karşı Katman 2"
+> bölümüne bakın.
+
 **Problem:** Bu bot (`gider-isleyici`) ile ayrı bir Apps Script projesi olan
 `Fitness` AYNI Telegram bot token'ını paylaşıyor. Fitness kendi tetikleyicisinde
 (günde 3 kez) doğrudan Telegram `getUpdates` çağırıyordu. Ama Telegram bir bota
@@ -306,9 +313,7 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   toplanır — iki yerde ayrı ayrı yazılmaz.
 
 - **Katman 2 (mesaj bazlı, tek seferlik trigger'lar — `Retry.js`):** Katman 1
-  tükendiğinde mesaj `yeniden_deneme_kuyrugu` sekmesine (harcama tablosuyla
-  aynı spreadsheet'te, `telegram_queue`'dan TAMAMEN AYRI, ona hiç dokunulmaz)
-  yazılır ve **o mesaja özel, tek seferlik** bir Apps Script trigger kurulur.
+  tükendiğinde **o mesaja özel, tek seferlik** bir Apps Script trigger kurulur.
   **Kasıtlı olarak sürekli/periyodik bir trigger YOK** (kullanıcı kararı, ilk
   önerilen "tek kalıcı periyodik tarayıcı" tasarımı reddedildi) — her trigger,
   bir mesajın gerçekten başarısız kalmasının doğal bir sonucu olarak kurulur.
@@ -318,6 +323,24 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   ÖNCEKİ (artık ateşlenmiş) trigger silinir — Apps Script'in tek seferlik
   (`after`) trigger'ları ateşlendikten sonra KENDİLİĞİNDEN silinmediği için bu
   temizlik atlanırsa proje trigger kotası (~20) sessizce tükenir.
+
+  **Ayrı bir sekme YOK — `telegram_queue` (Queue.js) yeniden kullanılıyor
+  (2026-09-26, kullanıcı kararı — ilk sürümde ayrı bir `yeniden_deneme_kuyrugu`
+  sekmesi vardı, kullanıcı bunu istemedi: "mevcut kolon yapısının üzerine
+  devam et").** `Queue.js > QUEUE_HEADERS` artık 11 kolon: `update_id, chat_id,
+  text, date` (Fitness'in okuduğu SABİT A:D sözleşmesi, hiç değişmedi) +
+  `durum, deneme_asamasi, sonraki_deneme_zamani, ilk_hata_zamani,
+  son_deneme_zamani, son_hata_mesaji, trigger_id` (E:K, gider-isleyici'nin
+  KENDİ retry bookkeeping'i — Fitness bunları hiç okumaz). `doPost` zaten HER
+  metin mesajı için Gemini'den ÖNCE `kuyrugaEkle_`'yi çağırıyordu (A:D'yi
+  doldurur); Gemini başarısız olduğunda `Retry.js > kuyrukSatiriniUpdateIdIleBul_`
+  AYNI satırı `update_id` ile bulup E:K'yı doldurur — YENİ bir satır asla
+  eklenmez (bulunamazsa, olmaması gereken bir durum için savunma amaçlı yeni
+  satır eklenir). Mevcut (retry kolonları eklenmeden önce oluşmuş, 4 kolonlu)
+  production sekmesi için `getOrCreateQueueSheet_` başlık satırını sessizce
+  E:K ile genişletir (tek seferlik, idempotent göç, A:D'deki veriye
+  dokunmaz). Bu sekmedeki satırların TÜMÜ retry-takipli DEĞİLDİR — `durum`
+  boşsa mesaj normal işlendi (ya da hiç Gemini'ye gitmedi, örn. komut).
 
   **5. (son, 4 saatlik) aşama da başarısız olursa sistem PES EDER** — 6. bir
   trigger KURULMAZ. Satır `durum=PES_EDILDI` olarak işaretlenir (**ASLA
@@ -350,15 +373,27 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   `PES_EDILDI` satırın (yani hiçbir yere kaydedilmemiş bir harcamanın) 5 gün
   sonra sessizce ve kalıcı olarak kaybolması demekti. Kullanıcı bunu açıkça
   reddetti: **"pes edilen mesajlar asla silinmemeli, harcamaları unutup da
-  kayıt altına almamak olmaz."** Düzeltme: `eskiKayitlariTemizle_` artık
-  SADECE `durum=TAMAMLANDI` olan satırları (ve sadece onlar 5 günden eskiyse)
-  siler. `BEKLIYOR`/`ISLENIYOR` (hâlâ aktif iş) ve `PES_EDILDI` (kullanıcının
-  elle kaydetmesi gereken bir harcama) yaşı ne olursa olsun ASLA otomatik
-  silinmez. Bunun doğal sonucu: başarıyla işlenen bir satır artık HEMEN
-  silinmiyor — `TAMAMLANDI`'ya geçiyor ve ancak 5 gün sonra temizleniyor
-  (`zamanlanmisTekrarDenemeyiIsle`'ın başarı dalı, `satiriSil_` yerine
-  `satiriGuncelle_` kullanıyor). `yenidenDenemeKuyruguDurumu()` artık
-  `tamamlanan` sayısını da raporluyor.
+  kayıt altına almamak olmaz."** Düzeltme: `BEKLIYOR`/`ISLENIYOR` (hâlâ aktif
+  iş) ve `PES_EDILDI` (kullanıcının elle kaydetmesi gereken bir harcama) yaşı
+  ne olursa olsun ASLA silinmez — bu kural `telegram_queue`'ya taşındıktan
+  sonra da (aşağıya bkz.) DEĞİŞMEDEN korunuyor. Bunun doğal sonucu: başarıyla
+  işlenen bir satır artık HEMEN silinmiyor — `TAMAMLANDI`'ya geçiyor ve ancak
+  5 gün sonra temizleniyor. `yenidenDenemeKuyruguDurumu()` `tamamlanan`
+  sayısını da raporluyor.
+
+  **Silme mi, sadece kolon boşaltma mı? (2026-09-26, iki adımlı karar):**
+  `telegram_queue` paylaşılan sekmeye taşınınca önce en güvenli yolu seçip
+  `eskiKayitlariTemizle_`'yi satırı SİLMEYECEK, sadece E:K'yı boşaltacak
+  şekilde yazdım (Fitness'in de okuduğu bir satırı silmenin onun cursor/geçmiş
+  mantığını bilmediğimiz şekilde bozabileceği riskiyle). Kullanıcı bunu
+  netleştirdi: **Fitness günde 3 kez çalışıp SADECE aynı günün mesajlarıyla
+  ilgileniyor, 5 günden eski satırların silinmesi onun için sorun DEĞİL.**
+  Bu bilgiyle `eskiKayitlariTemizle_` son haline geldi: `durum` boş (retry'a
+  hiç girmemiş sıradan mesajlar) ya da `TAMAMLANDI` olan ve `date` sütunundan
+  itibaren 5 günden eski satırlar **gerçekten silinir** (`sheet.deleteRow`).
+  `BEKLIYOR`/`ISLENIYOR`/`PES_EDILDI` kuralı (yukarıdaki paragraf) bu
+  netleşmeden BAĞIMSIZ ve DEĞİŞMEDEN duruyor — o üç durumun asla silinmemesi
+  Fitness'ten değil, "bir harcamayı unutma" ilkesinden kaynaklanıyor.
 
   Gecikmeli başarıda cevaba "⏳ Gecikmeli işlendi (X saat önce gönderilmişti):"
   notu eklenir (kullanıcı kararı — hangi eski mesajın cevaplandığı belli olsun).
@@ -378,18 +413,22 @@ büyük görünmesini böyle bir takılmanın sinyali olarak yorumlar.
 
 **Doğrulama:** Repo'da otomatik test altyapısı yok; mevcut projede yerleşik
 "Node üzerinde mock Apps Script globalleriyle doğrulandı" deseniyle (scratch,
-commit edilmeyen bir harness) uçtan uca doğrulandı — 41/41 kontrol PASS:
-`sonrakiGecikmeSaat_`/`sonAsamaMi_`'nin 1-1-2-2-4 dizisi, `hataGeciciMi_`
-tablo testi, `callGeminiIleTekrarDeneme_`'in 503'te 3 deneme + `gecici=true`
-/ 401'de tek denemede fırlatma davranışı, tam 5 aşamalık escalation zinciri
-(her aşamada doğru gecikme + son aşamada PES_EDILDI + trigger sızıntısı
-olmaması), erken başarı senaryosu (satır silinir + gecikmeli-not), toplu
-pes-edildi bildirimi, 5 günlük FIFO temizlik, ve `doPost` regresyonu (`/komutlar`,
-dedup, kalıcı hata yönlendirmesi, geçici hata kuyruklanması). **Gerçek
-Telegram trafiğiyle uçtan uca smoke-test henüz yapılmadı** — deploy (`clasp
-push` + Manage deployments → New version, kullanıcı tarafından) sonrası
-gerçek bir 503/429 senaryosuyla ya da geçici olarak `CONFIG.geminiModel`'i
-geçersiz bir isimle değiştirip 404 alarak doğrulanmalı.
+commit edilmeyen bir harness) uçtan uca doğrulandı — 35/35 kontrol PASS:
+`telegram_queue` başlık göçü (4→11 kolon, A:D verisi korunarak) ve
+`kuyrugaEkle_`'nin sadece A:D yazdığı, `sonrakiGecikmeSaat_`/`sonAsamaMi_`'nin
+1-1-2-2-4 dizisi, `hataGeciciMi_` tablo testi, "yüksek talep" kısayolunun tek
+çağrıda (sleep'siz) çıktığı, `doPost`'ta geçici/kalıcı hatanın `kuyrugaEkle_`'nin
+AZ ÖNCE eklediği AYNI satırı bulup güncellediği (yeni satır oluşmadığı), tam 5
+aşamalık escalation zinciri (paylaşılan sekme üzerinde, her aşamada doğru
+gecikme + son aşamada PES_EDILDI + trigger sızıntısı olmaması), erken başarı
+senaryosu (TAMAMLANDI'ya geçer, silinmez), FIFO'nun TAMAMLANDI/boş-durumlu 5
+günden eski satırları GERÇEKTEN sildiği ama PES_EDILDI/BEKLIYOR/ISLENIYOR'u
+yaşı ne olursa olsun hiç silmediği, toplu pes-edildi bildirimi, ve
+`/pesedilenler`+`/pesdene` komutları. **Gerçek Telegram trafiğiyle uçtan uca
+smoke-test henüz yapılmadı** — deploy (`clasp push` + Manage deployments →
+New version, kullanıcı tarafından) sonrası gerçek bir 503/429 senaryosuyla ya
+da geçici olarak `CONFIG.geminiModel`'i geçersiz bir isimle değiştirip 404
+alarak doğrulanmalı.
 
 **Sonraki oturum için not:** bu tasarımın kabul edilmeden önceki bir sürümünde
 (kullanıcı tarafından reddedildi) tek bir kalıcı periyodik tarayıcı trigger
