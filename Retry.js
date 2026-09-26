@@ -5,73 +5,74 @@
  * ============================================================================
  * Main.js > callGeminiIleTekrarDeneme_ (Katman 1) bir mesaj için art arda
  * GEMINI_MAX_DENEME kez denendiği halde GEÇİCİ bir hatayla (503, ağ hatası,
- * boş yanıt vb.) başarısız kalırsa, mesaj burada tanımlı `yeniden_deneme_kuyrugu`
- * sekmesine yazılır ve o mesaja özel, TEK SEFERLİK bir Apps Script trigger
- * kurulur (ilk kez 1 saat sonrasına). Trigger ateşlendiğinde yine Katman 1
- * (3 hızlı deneme) çalışır; yine geçici bir hatayla başarısız olursa BİR
- * SONRAKİ AŞAMA için yeni bir tek seferlik trigger kurulur. Aşama gecikmeleri
- * RETRY_BACKOFF_SAAT: 1-1-2-2-4 saat (toplam ~10 saat, 5 aşama). Son (5.)
- * aşama da başarısız olursa sistem PES EDER — 6. bir trigger KURULMAZ, satır
- * `PES_EDILDI` durumuna işaretlenir (ASLA silinmez) ve kullanıcıya hem bu
- * mesaj için hem de kuyrukta biriken diğer pes-edilmiş mesajlar için toplu
- * bir bildirim gönderilir. Kalıcı bir HTTP hatası (400/401/403/404 — Main.js
- * > GEMINI_KALICI_HTTP_KODLARI) alınırsa hiç retry denenmeden aynı PES_EDILDI
- * yoluna girilir (bkz. pesEdildiKuyruguEkleVeBildir_). Gemini'nin "model şu an
- * yüksek talepte" (`error.status: "UNAVAILABLE"`) yanıtı özel olarak
- * tanınır (Main.js > hataYuksekTalepMi_): sebep zaten bilindiği için Katman
- * 1'in hızlı denemeleri boşuna harcanmaz, doğrudan Katman 2'ye (bu dosya)
- * geçilir.
+ * boş yanıt vb.) başarısız kalırsa, bu dosya o mesaja özel, TEK SEFERLİK bir
+ * Apps Script trigger kurar (ilk kez 1 saat sonrasına). Trigger ateşlendiğinde
+ * yine Katman 1 (3 hızlı deneme) çalışır; yine geçici bir hatayla başarısız
+ * olursa BİR SONRAKİ AŞAMA için yeni bir tek seferlik trigger kurulur. Aşama
+ * gecikmeleri RETRY_BACKOFF_SAAT: 1-1-2-2-4 saat (toplam ~10 saat, 5 aşama).
+ * Son (5.) aşama da başarısız olursa sistem PES EDER — 6. bir trigger
+ * KURULMAZ, satır `PES_EDILDI` durumuna işaretlenir (ASLA silinmez) ve
+ * kullanıcıya hem bu mesaj için hem de kuyrukta biriken diğer pes-edilmiş
+ * mesajlar için toplu bir bildirim gönderilir. Kalıcı bir HTTP hatası
+ * (400/401/403/404 — Main.js > GEMINI_KALICI_HTTP_KODLARI) alınırsa hiç retry
+ * denenmeden aynı PES_EDILDI yoluna girilir (bkz. pesEdildiKuyruguEkleVeBildir_).
+ * Gemini'nin "model şu an yüksek talepte" (`error.status: "UNAVAILABLE"`)
+ * yanıtı özel olarak tanınır (Main.js > hataYuksekTalepMi_): sebep zaten
+ * bilindiği için Katman 1'in hızlı denemeleri boşuna harcanmaz, doğrudan
+ * Katman 2'ye (bu dosya) geçilir.
  *
  * KASITLI OLARAK sürekli/periyodik bir trigger YOK — her trigger, bir mesajın
  * gerçekten başarısız kalmasının doğal bir sonucu olarak kurulur (kullanıcı
- * kararı). Bunun bedeli: `yeniden_deneme_kuyrugu` sekmesindeki 5 günden eski
- * satırları temizleyen FIFO mekanizması da (eskiKayitlariTemizle_) ayrı bir
- * trigger yerine, zaten var olan giriş noktalarına ucuz bir ilk-adım olarak
- * eklendi. **FIFO SADECE `TAMAMLANDI` durumundaki satırları siler** —
- * `BEKLIYOR`/`ISLENIYOR` hâlâ aktif bir işi, `PES_EDILDI` ise kullanıcının
- * kaydetmesi gereken bir harcamayı temsil eder; ikisi de yaşı ne olursa
- * olsun ASLA otomatik silinmez (kullanıcı kararı — bir harcamayı sessizce
- * unutmak/kaybetmek kabul edilemez). Başarıyla işlenen bir satır bu yüzden
- * hemen silinmez, `TAMAMLANDI`'ya geçer ve ancak 5 gün sonra temizlenir.
+ * kararı).
  *
- * `telegram_queue` sekmesiyle (Queue.js, Fitness projesiyle paylaşılan) HİÇBİR
- * ilişkisi yoktur — bu dosya tamamen ayrı, yeni bir sekme (`yeniden_deneme_kuyrugu`)
- * kullanır ve Queue.js'e hiç dokunmaz.
+ * ============================================================================
+ * ÖNEMLİ (2026-09-26) — AYRI BİR SEKME YOK, `telegram_queue` YENİDEN KULLANILIYOR
+ * ============================================================================
+ * Bu modül KENDİ sekmesini TUTMAZ. Retry bookkeeping'i (durum, deneme_asamasi,
+ * sonraki_deneme_zamani, ilk_hata_zamani, son_deneme_zamani, son_hata_mesaji,
+ * trigger_id) Queue.js'in zaten yönettiği, Fitness projesiyle PAYLAŞILAN
+ * `telegram_queue` sekmesine E:K kolonları olarak eklendi (bkz. Queue.js >
+ * QUEUE_HEADERS). Neden: kullanıcı kararı — "yeniden deneme için yeni sayfa
+ * açma, mevcut kolon yapısının üzerine devam et."
+ *
+ * Bu, doPost'un HER metin mesajı için zaten çağırdığı `kuyrugaEkle_`'nin
+ * (Queue.js) A:D'yi (update_id/chat_id/text/date) doldurduğu satırın AYNISINI
+ * kullanır — Gemini başarısız olduğunda `kuyrukSatiriniUpdateIdIleBul_` o
+ * satırı update_id ile bulup E:K'yı doldurur (YENİ bir satır EKLEMEZ). Yani bu
+ * sekmedeki satırların TÜMÜ retry-takip kaydı DEĞİLDİR: `durum` (E) boşsa o
+ * mesaj normal işlendi ya da hiç Gemini'ye gitmedi (komut vb.); `durum`
+ * BEKLIYOR/ISLENIYOR/PES_EDILDI/TAMAMLANDI'dan biriyse retry sistemine
+ * girmiştir.
+ *
+ * **Silme kuralı (kullanıcı onayı, 2026-09-26):** Fitness günde 3 kez çalışıp
+ * SADECE aynı günün mesajlarıyla ilgilendiği için 5 günden eski satırların
+ * silinmesi Fitness için sorun DEĞİL — bu yüzden `eskiKayitlariTemizle_`
+ * `durum` boş (retry'a hiç girmemiş, ilk denemede başarılı olmuş sıradan
+ * mesajlar) ya da `TAMAMLANDI` olan ve 5 günden eski satırları TAMAMEN SİLER
+ * (`sheet.deleteRow`). Tek istisna, HİÇBİR ZAMAN silinmeyen iki durum:
+ * `BEKLIYOR`/`ISLENIYOR` (hâlâ aktif iş) ve `PES_EDILDI` (kullanıcının haberdar
+ * olması gereken, hiçbir yere kaydedilmemiş bir harcama) — bunlar yaşı ne
+ * olursa olsun dokunulmaz, çünkü bir harcamayı sessizce unutmak/kaybetmek
+ * kabul edilemez (kullanıcı kararı, Fitness'ten bağımsız).
  *
  * İlgili diğer dosyalar:
+ *   - Queue.js: QUEUE_HEADERS/getOrCreateQueueSheet_/kuyrugaEkle_ (paylaşılan
+ *     sekme ve A:D kontratı burada yönetilir)
  *   - Main.js: callGeminiIleTekrarDeneme_ / hataGeciciMi_ / mesajiIsleVeYanitla_ /
  *     doPost (geçici hatada yenidenDenemeKuyruguEkle_'yi, kalıcı hatada
  *     pesEdildiKuyruguEkleVeBildir_'i çağırır)
- *   - Expenses.js: getTargetSpreadsheet_ (kuyruk da aynı spreadsheet'i kullanır)
+ *   - Expenses.js: getTargetSpreadsheet_ (Queue.js üzerinden dolaylı kullanılır)
  */
 
 // ============================================================================
 // Sabitler
 // ============================================================================
 
-/** Kuyruk sekmesinin adı — telegram_queue'dan tamamen bağımsız, yeni bir sekme. */
-const RETRY_SHEET_NAME = "yeniden_deneme_kuyrugu";
-
-/** Kuyruk sekmesi başlık satırı (kolon sırası satırGuncelle_/okuma ile birebir eşleşmeli). */
-const RETRY_HEADERS = [
-  "update_id",
-  "chat_id",
-  "text",
-  "mesaj_tarihi",
-  "durum",
-  "deneme_asamasi",
-  "sonraki_deneme_zamani",
-  "ilk_hata_zamani",
-  "son_deneme_zamani",
-  "son_hata_mesaji",
-  "trigger_id",
-];
-
 const RETRY_DURUM = {
   BEKLIYOR: "BEKLIYOR", // bir trigger'ı var, vakti geldiğinde işlenecek
   ISLENIYOR: "ISLENIYOR", // şu an bir trigger tarafından işleniyor (çok kısa ömürlü ara durum)
-  PES_EDILDI: "PES_EDILDI", // tüm aşamalar (ya da kalıcı hata) tükendi, retry durduruldu — ASLA SİLİNMEZ
-  TAMAMLANDI: "TAMAMLANDI", // gecikmeli de olsa başarıyla işlendi — SADECE bu durum FIFO ile silinebilir
+  PES_EDILDI: "PES_EDILDI", // tüm aşamalar (ya da kalıcı hata) tükendi, retry durduruldu — ASLA SİLİNMEZ/TEMİZLENMEZ
+  TAMAMLANDI: "TAMAMLANDI", // gecikmeli de olsa başarıyla işlendi — SADECE bu durumun E:K kolonları FIFO ile temizlenebilir
 };
 
 /**
@@ -90,75 +91,94 @@ const RETRY_LOCK_TIMEOUT_MS = 10000;
 /** Aynı anda birden fazla mesajın vadesi gelirse tek bir trigger ateşlenişinde işlenecek üst sınır. */
 const RETRY_MAX_SATIR_PER_TETIKLEME = 5;
 
-/** FIFO temizlik eşiği: ilk_hata_zamani'ndan itibaren bu süreyi aşan satırlar silinir. */
+/** FIFO temizlik eşiği: ilk_hata_zamani'ndan itibaren bu süreyi aşan TAMAMLANDI satırların E:K'sı boşaltılır. */
 const RETRY_TEMIZLIK_ESIK_MS = 5 * 24 * 60 * 60 * 1000; // 5 gün
 
 // ============================================================================
-// Sheets erişim yardımcıları
+// Kuyruk (telegram_queue, Queue.js) satır okuma/yazma yardımcıları
 // ============================================================================
 
 /**
- * Kuyruk sekmesini döndürür, yoksa başlık satırıyla birlikte oluşturur. Harcama
- * tablosuyla AYNI spreadsheet'te (getTargetSpreadsheet_, bkz. Expenses.js) ayrı
- * bir sekme olarak tutulur.
- * @return {GoogleAppsScript.Spreadsheet.Sheet}
+ * Ham bir sheet satırını (QUEUE_HEADERS sırasıyla) okunabilir bir nesneye
+ * çevirir. `satirNo` 1-indeksli gerçek sheet satır numarasıdır.
+ * @param {number} satirNo
+ * @param {Array<*>} row
+ * @return {Object}
  */
-function getOrCreateRetrySheet_() {
-  var spreadsheet = getTargetSpreadsheet_();
-  var sheet = spreadsheet.getSheetByName(RETRY_SHEET_NAME);
-  if (!sheet) {
-    sheet = spreadsheet.insertSheet(RETRY_SHEET_NAME);
-    sheet.appendRow(RETRY_HEADERS);
-    log_("yenidenDeneme.sekme-olusturuldu", RETRY_SHEET_NAME);
-  }
-  return sheet;
+function kuyrukSatirNesnesiOlustur_(satirNo, row) {
+  return {
+    satirNo: satirNo,
+    updateId: row[0],
+    chatId: row[1],
+    text: row[2],
+    mesajTarihi: row[3],
+    durum: row[4],
+    denemeAsamasi: row[5],
+    sonrakiDenemeZamani: row[6],
+    ilkHataZamani: row[7],
+    sonDenemeZamani: row[8],
+    sonHataMesaji: row[9],
+    triggerId: row[10],
+  };
 }
 
 /**
- * 2. satırdan itibaren tüm veri satırlarını okur, her birini RETRY_HEADERS
- * sırasıyla eşleşen alan adlarıyla bir nesneye çevirir. `satirNo` 1-indeksli
- * gerçek sheet satır numarasıdır (güncelleme/silme için gerekli).
+ * 2. satırdan itibaren tüm veri satırlarını okur. DİKKAT: bu, `telegram_queue`
+ * PAYLAŞILAN sekmesindeki TÜM mesajları döndürür (retry-takipli olsun ya da
+ * olmasın) — çağıranlar `durum` alanına göre filtrelemelidir.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @return {Array<Object>}
  */
-function retryTumSatirlariOku_(sheet) {
+function kuyrukTumSatirlariOku_(sheet) {
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) {
     return [];
   }
-  var degerler = sheet
-    .getRange(2, 1, lastRow - 1, RETRY_HEADERS.length)
-    .getValues();
+  var degerler = sheet.getRange(2, 1, lastRow - 1, QUEUE_HEADERS.length).getValues();
   return degerler.map(function (row, i) {
-    return {
-      satirNo: i + 2,
-      updateId: row[0],
-      chatId: row[1],
-      text: row[2],
-      mesajTarihi: row[3],
-      durum: row[4],
-      denemeAsamasi: row[5],
-      sonrakiDenemeZamani: row[6],
-      ilkHataZamani: row[7],
-      sonDenemeZamani: row[8],
-      sonHataMesaji: row[9],
-      triggerId: row[10],
-    };
+    return kuyrukSatirNesnesiOlustur_(i + 2, row);
   });
 }
 
 /**
- * `row` nesnesini (retryTumSatirlariOku_'dan) `alanlar` ile birleştirip TEK bir
- * setValues çağrısıyla ilgili satırı günceller — sadece değişen alanları
- * belirtmek yeterli, diğerleri `row`'daki mevcut değerleriyle korunur.
+ * `update_id`'ye sahip satırı bulur (en son eklenenden geriye doğru arar —
+ * pratikte aranan satır genelde kuyrugaEkle_'nin AZ ÖNCE eklediği en son
+ * satırdır). Bulunamazsa null döner (savunma amaçlı — normalde HER metin
+ * mesajı için doPost bu satırı Gemini'den ÖNCE zaten ekler).
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
- * @param {Object} row retryTumSatirlariOku_'dan gelen satır nesnesi.
- * @param {Object} alanlar Güncellenecek alanlar (kısmi).
+ * @param {number} updateId
+ * @return {Object|null}
+ */
+function kuyrukSatiriniUpdateIdIleBul_(sheet, updateId) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return null;
+  }
+  var idKolonu = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = idKolonu.length - 1; i >= 0; i--) {
+    if (Number(idKolonu[i][0]) === Number(updateId)) {
+      var satirNo = i + 2;
+      var row = sheet.getRange(satirNo, 1, 1, QUEUE_HEADERS.length).getValues()[0];
+      return kuyrukSatirNesnesiOlustur_(satirNo, row);
+    }
+  }
+  return null;
+}
+
+/**
+ * `row` nesnesini (kuyrukTumSatirlariOku_/kuyrukSatiriniUpdateIdIleBul_'dan)
+ * `alanlar` ile birleştirip TEK bir setValues çağrısıyla ilgili satırı
+ * günceller — sadece değişen alanları belirtmek yeterli, diğerleri `row`'daki
+ * mevcut değerleriyle korunur (A:D dahil, yani Fitness'in verisi asla
+ * bozulmaz çünkü zaten hep `row`'dan aynen geri yazılır).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object} row
+ * @param {Object} alanlar Güncellenecek alanlar (kısmi, sadece E:K'dan olmalı).
  */
 function satiriGuncelle_(sheet, row, alanlar) {
   var guncel = Object.assign({}, row, alanlar);
   sheet
-    .getRange(row.satirNo, 1, 1, RETRY_HEADERS.length)
+    .getRange(row.satirNo, 1, 1, QUEUE_HEADERS.length)
     .setValues([
       [
         guncel.updateId,
@@ -177,8 +197,9 @@ function satiriGuncelle_(sheet, row, alanlar) {
 }
 
 /**
- * Bir satırı PES_EDILDI durumuna işaretler (silmez, trigger_id temizlenir —
- * artık kurulu bir trigger'ı yok).
+ * Bir satırı PES_EDILDI durumuna işaretler (E:K'daki durum/hata alanları
+ * güncellenir, trigger_id temizlenir — artık kurulu bir trigger'ı yok). Satır
+ * ASLA silinmez/A:D'ye dokunulmaz.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {Object} row
  * @param {string} hataMesaji
@@ -194,14 +215,18 @@ function satiriPesEdildiOlarakIsaretle_(sheet, row, hataMesaji, simdi) {
 }
 
 /**
- * `ilk_hata_zamani`'ndan itibaren RETRY_TEMIZLIK_ESIK_MS'i (5 gün) aşan
- * satırları siler — AMA SADECE `durum=TAMAMLANDI` olanları. `BEKLIYOR` ve
- * `ISLENIYOR` hâlâ devam eden aktif bir işi temsil eder, `PES_EDILDI` ise
- * kullanıcının haberdar olması gereken, hiçbir yere kaydedilmemiş bir
- * harcamadır — ikisi de yaşı ne olursa olsun ASLA otomatik silinmez, aksi
- * halde bir harcama sessizce unutulmuş/kaybedilmiş olur (kullanıcı kararı).
- * Yalnızca gecikmeli de olsa başarıyla işlenip TAMAMLANDI'ya geçmiş satırlar
- * (bkz. zamanlanmisTekrarDenemeyiIsle) zaman aşımıyla temizlenmeye uygundur.
+ * `date` (mesajTarihi) sütunundan itibaren RETRY_TEMIZLIK_ESIK_MS'i (5 gün)
+ * aşan satırları SİLER — hem `durum` boş (retry'a hiç girmemiş, ilk denemede
+ * başarılı olmuş sıradan mesajlar) hem `TAMAMLANDI` (gecikmeli de olsa
+ * başarıyla işlenmiş) satırlar bu kapsamdadır. Fitness günde 3 kez çalışıp
+ * sadece aynı günün mesajlarıyla ilgilendiği için 5 günlük geçmişi hiç
+ * kullanmıyor — bu yüzden gerçek satır silme Fitness için güvenli (kullanıcı
+ * onayı, 2026-09-26).
+ *
+ * `BEKLIYOR`/`ISLENIYOR` (hâlâ aktif iş) ve `PES_EDILDI` (kullanıcının
+ * haberdar olması gereken, hiçbir yere kaydedilmemiş bir harcama) yaşı ne
+ * olursa olsun ASLA silinmez — bir harcamayı sessizce unutmak/kaybetmek kabul
+ * edilemez (kullanıcı kararı, bu iki durum için Fitness'ten bağımsız).
  *
  * Ayrı bir periyodik trigger YOK (kullanıcı kararı); bu yüzden bu fonksiyon
  * zaten var olan giriş noktalarının (yenidenDenemeKuyruguEkle_,
@@ -211,27 +236,28 @@ function satiriPesEdildiOlarakIsaretle_(sheet, row, hataMesaji, simdi) {
  * @param {Date} simdi
  */
 function eskiKayitlariTemizle_(sheet, simdi) {
-  var satirlar = retryTumSatirlariOku_(sheet);
+  var satirlar = kuyrukTumSatirlariOku_(sheet);
   var silinecekler = satirlar
     .filter(function (row) {
-      if (row.durum !== RETRY_DURUM.TAMAMLANDI) {
+      if (
+        row.durum === RETRY_DURUM.BEKLIYOR ||
+        row.durum === RETRY_DURUM.ISLENIYOR ||
+        row.durum === RETRY_DURUM.PES_EDILDI
+      ) {
         return false;
       }
-      var ilkHataMs =
-        row.ilkHataZamani instanceof Date
-          ? row.ilkHataZamani.getTime()
-          : new Date(row.ilkHataZamani).getTime();
-      return simdi.getTime() - ilkHataMs > RETRY_TEMIZLIK_ESIK_MS;
+      var mesajMs =
+        row.mesajTarihi instanceof Date
+          ? row.mesajTarihi.getTime()
+          : new Date(row.mesajTarihi).getTime();
+      return simdi.getTime() - mesajMs > RETRY_TEMIZLIK_ESIK_MS;
     })
     .sort(function (a, b) {
       return b.satirNo - a.satirNo; // azalan sırayla sil, index kaymasını önler
     });
 
   silinecekler.forEach(function (row) {
-    log_("yenidenDeneme.fifo-temizlik", {
-      updateId: row.updateId,
-      satirNo: row.satirNo,
-    });
+    log_("yenidenDeneme.fifo-temizlik", { updateId: row.updateId, satirNo: row.satirNo });
     sheet.deleteRow(row.satirNo);
   });
 }
@@ -306,7 +332,11 @@ function zamanliTetikleyiciSil_(triggerId) {
 
 /**
  * Katman 1 (callGeminiIleTekrarDeneme_) GEÇİCİ bir hatayla tükendiğinde
- * `doPost` tarafından çağrılır: mesajı kuyruğa yazar ve 1 saat sonrasına ilk
+ * `doPost` tarafından çağrılır. `kuyrugaEkle_`'nin (Queue.js) bu `update_id`
+ * için AZ ÖNCE (aynı doPost execution'ında, Gemini çağrısından ÖNCE) eklediği
+ * satırı bulup E:K kolonlarını doldurur — YENİ bir satır EKLEMEZ. O satır
+ * (savunma amaçlı, normalde olmaması gereken bir durumda) bulunamazsa mesajı
+ * kaybetmemek için tam bir satır olarak eklenir. 1 saat sonrasına ilk
  * trigger'ı kurar.
  * @param {number} updateId
  * @param {number|string} chatId
@@ -324,30 +354,47 @@ function yenidenDenemeKuyruguEkle_(
   var lock = LockService.getScriptLock();
   lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
   try {
-    var sheet = getOrCreateRetrySheet_();
+    var sheet = getOrCreateQueueSheet_();
     var simdi = new Date();
     eskiKayitlariTemizle_(sheet, simdi);
 
     var ilkAsama = 1;
     var gecikmeSaat = sonrakiGecikmeSaat_(ilkAsama);
     var triggerId = zamanliTetikleyiciKur_(gecikmeSaat);
-    var sonrakiDenemeZamani = new Date(
-      simdi.getTime() + gecikmeSaat * 60 * 60 * 1000,
-    );
+    var sonrakiDenemeZamani = new Date(simdi.getTime() + gecikmeSaat * 60 * 60 * 1000);
 
-    sheet.appendRow([
-      updateId,
-      chatId,
-      text,
-      new Date(mesajTarihiSaniye * 1000),
-      RETRY_DURUM.BEKLIYOR,
-      ilkAsama,
-      sonrakiDenemeZamani,
-      simdi,
-      simdi,
-      hataMesaji,
-      triggerId,
-    ]);
+    var alanlar = {
+      durum: RETRY_DURUM.BEKLIYOR,
+      denemeAsamasi: ilkAsama,
+      sonrakiDenemeZamani: sonrakiDenemeZamani,
+      ilkHataZamani: simdi,
+      sonDenemeZamani: simdi,
+      sonHataMesaji: hataMesaji,
+      triggerId: triggerId,
+    };
+
+    var mevcutSatir = kuyrukSatiriniUpdateIdIleBul_(sheet, updateId);
+    if (mevcutSatir) {
+      satiriGuncelle_(sheet, mevcutSatir, alanlar);
+    } else {
+      logHata_(
+        "yenidenDeneme.kuyruk-satiri-bulunamadi",
+        "update_id=" + updateId + " için kuyrugaEkle_ satırı yok, yeni satır ekleniyor.",
+      );
+      sheet.appendRow([
+        updateId,
+        chatId,
+        text,
+        new Date(mesajTarihiSaniye * 1000),
+        alanlar.durum,
+        alanlar.denemeAsamasi,
+        alanlar.sonrakiDenemeZamani,
+        alanlar.ilkHataZamani,
+        alanlar.sonDenemeZamani,
+        alanlar.sonHataMesaji,
+        alanlar.triggerId,
+      ]);
+    }
     log_("yenidenDeneme.kuyruklandi", {
       updateId: updateId,
       triggerId: triggerId,
@@ -360,8 +407,9 @@ function yenidenDenemeKuyruguEkle_(
 
 /**
  * Katman 1 KALICI bir hatayla (400/401/403/404) başarısız olduğunda `doPost`
- * tarafından çağrılır: hiç retry denenmeden satır doğrudan PES_EDILDI olarak
- * kuyruğa yazılır ve kullanıcıya bildirim gönderilir.
+ * tarafından çağrılır: hiç retry denenmeden, `kuyrugaEkle_`'nin az önce
+ * eklediği AYNI satır doğrudan PES_EDILDI olarak işaretlenir (bulunamazsa
+ * savunma amaçlı yeni satır eklenir) ve kullanıcıya bildirim gönderilir.
  * @param {number} updateId
  * @param {number|string} chatId
  * @param {string} text
@@ -377,36 +425,53 @@ function pesEdildiKuyruguEkleVeBildir_(
 ) {
   var lock = LockService.getScriptLock();
   lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
-  var sheet, yeniSatirNo;
+  var sheet, satirNo;
   try {
-    sheet = getOrCreateRetrySheet_();
+    sheet = getOrCreateQueueSheet_();
     var simdi = new Date();
     eskiKayitlariTemizle_(sheet, simdi);
 
-    sheet.appendRow([
-      updateId,
-      chatId,
-      text,
-      new Date(mesajTarihiSaniye * 1000),
-      RETRY_DURUM.PES_EDILDI,
-      0,
-      "",
-      simdi,
-      simdi,
-      hataMesaji,
-      "",
-    ]);
-    yeniSatirNo = sheet.getLastRow();
-    log_("yenidenDeneme.kalici-hata-kuyruklandi", {
-      updateId: updateId,
-      satirNo: yeniSatirNo,
-    });
+    var alanlar = {
+      durum: RETRY_DURUM.PES_EDILDI,
+      denemeAsamasi: 0,
+      sonrakiDenemeZamani: "",
+      ilkHataZamani: simdi,
+      sonDenemeZamani: simdi,
+      sonHataMesaji: hataMesaji,
+      triggerId: "",
+    };
+
+    var mevcutSatir = kuyrukSatiriniUpdateIdIleBul_(sheet, updateId);
+    if (mevcutSatir) {
+      satiriGuncelle_(sheet, mevcutSatir, alanlar);
+      satirNo = mevcutSatir.satirNo;
+    } else {
+      logHata_(
+        "yenidenDeneme.kuyruk-satiri-bulunamadi",
+        "update_id=" + updateId + " için kuyrugaEkle_ satırı yok, yeni satır ekleniyor.",
+      );
+      sheet.appendRow([
+        updateId,
+        chatId,
+        text,
+        new Date(mesajTarihiSaniye * 1000),
+        alanlar.durum,
+        alanlar.denemeAsamasi,
+        alanlar.sonrakiDenemeZamani,
+        alanlar.ilkHataZamani,
+        alanlar.sonDenemeZamani,
+        alanlar.sonHataMesaji,
+        alanlar.triggerId,
+      ]);
+      satirNo = sheet.getLastRow();
+    }
+    log_("yenidenDeneme.kalici-hata-kuyruklandi", { updateId: updateId, satirNo: satirNo });
   } finally {
     lock.releaseLock();
   }
 
   // Telegram gönderimi kilit DIŞINDA yapılır (ağ çağrısı kilit altında tutulmaz).
-  pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, yeniSatirNo);
+  pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, satirNo);
 }
 
 /**
@@ -429,7 +494,7 @@ function pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, buSatirNo) {
       text,
   );
 
-  var digerPesEdilenler = retryTumSatirlariOku_(sheet).filter(function (row) {
+  var digerPesEdilenler = kuyrukTumSatirlariOku_(sheet).filter(function (row) {
     return row.durum === RETRY_DURUM.PES_EDILDI && row.satirNo !== buSatirNo;
   });
 
@@ -457,7 +522,8 @@ function pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, buSatirNo) {
  * Bir mesajın kendi aşamasına özel tek seferlik trigger'ı ateşlendiğinde Apps
  * Script tarafından çağrılır. Vadesi gelmiş (durum=BEKLIYOR ve
  * sonraki_deneme_zamani geçmiş) satırları bulup işler:
- *   - Başarılı → "gecikmeli işlendi" notuyla Telegram'a gönderilir, satır silinir.
+ *   - Başarılı → "gecikmeli işlendi" notuyla Telegram'a gönderilir, satır
+ *     SİLİNMEZ, durum=TAMAMLANDI'ya geçer.
  *   - Geçici hata + son aşama DEĞİLSE → bir sonraki aşama için yeni trigger kurulur.
  *   - Geçici hata + SON aşama (4sa) ise → PES EDİLİR, 6. trigger KURULMAZ.
  *   - Kalıcı hata (nadiren, savunma amaçlı) → doğrudan PES EDİLİR.
@@ -474,11 +540,11 @@ function zamanlanmisTekrarDenemeyiIsle() {
 
   var sheet, vadesiGelenler;
   try {
-    sheet = getOrCreateRetrySheet_();
+    sheet = getOrCreateQueueSheet_();
     var simdiClaim = new Date();
     eskiKayitlariTemizle_(sheet, simdiClaim);
 
-    var tumSatirlar = retryTumSatirlariOku_(sheet);
+    var tumSatirlar = kuyrukTumSatirlariOku_(sheet);
     vadesiGelenler = tumSatirlar
       .filter(function (row) {
         if (row.durum !== RETRY_DURUM.BEKLIYOR) {
@@ -528,7 +594,8 @@ function zamanlanmisTekrarDenemeyiIsle() {
           cevapMetni,
       );
       // Satır SİLİNMEZ — TAMAMLANDI olarak işaretlenir, yalnızca 5 günlük FIFO
-      // temizliği (eskiKayitlariTemizle_) bu durumdaki satırları kaldırır.
+      // temizliği (eskiKayitlariTemizle_) bu durumdaki satırların E:K'sını
+      // (A:D DEĞİL) boşaltır.
       satiriGuncelle_(sheet, row, {
         durum: RETRY_DURUM.TAMAMLANDI,
         sonHataMesaji: "",
@@ -605,7 +672,7 @@ function zamanlanmisTekrarDenemeyiIsle() {
 
 // ============================================================================
 // Komutlar (Main.js > islemKomut_ tarafından çağrılır, Telegram `/pesedilenler`
-// ve `/pesedilenleridene` komutlarının karşılığı)
+// ve `/pesdene` komutlarının karşılığı)
 // ============================================================================
 
 /**
@@ -615,9 +682,9 @@ function zamanlanmisTekrarDenemeyiIsle() {
  * @return {string}
  */
 function pesEdilenleriListele_() {
-  var sheet = getOrCreateRetrySheet_();
+  var sheet = getOrCreateQueueSheet_();
   var simdi = new Date();
-  var pesEdilenler = retryTumSatirlariOku_(sheet).filter(function (row) {
+  var pesEdilenler = kuyrukTumSatirlariOku_(sheet).filter(function (row) {
     return row.durum === RETRY_DURUM.PES_EDILDI;
   });
 
@@ -649,25 +716,25 @@ function pesEdilenleriListele_() {
   return (
     "❌ " +
     pesEdilenler.length +
-    " pes edilmiş mesaj var — /pesedilenleridene ile topluca tekrar deneyebilirsin:\n\n" +
+    " pes edilmiş mesaj var — /pesdene ile topluca tekrar deneyebilirsin:\n\n" +
     satirlar.join("\n\n")
   );
 }
 
 /**
- * `/pesedilenleridene` komutunun çıktısı: kuyruktaki TÜM `PES_EDILDI`
- * satırlarını, her biri için Katman 1'i (callGeminiIleTekrarDeneme_, en fazla
- * GEMINI_MAX_DENEME hızlı deneme) kullanarak ŞİMDİ topluca tekrar dener.
- * Katman 2'ye (yeni trigger kurma) HİÇ girmez — bu SADECE anlık, manuel bir
- * deneme; hâlâ başarısız kalanlar PES_EDILDI'de kalır (silinmez), sadece
+ * `/pesdene` komutunun çıktısı: kuyruktaki TÜM `PES_EDILDI` satırlarını, her
+ * biri için Katman 1'i (callGeminiIleTekrarDeneme_, en fazla GEMINI_MAX_DENEME
+ * hızlı deneme) kullanarak ŞİMDİ topluca tekrar dener. Katman 2'ye (yeni
+ * trigger kurma) HİÇ girmez — bu SADECE anlık, manuel bir deneme; hâlâ
+ * başarısız kalanlar PES_EDILDI'de kalır (silinmez), sadece
  * `son_hata_mesaji`/`son_deneme_zamani` güncellenir. Başarılı olanlar
- * otomatik akışla simetrik şekilde TAMAMLANDI'ya geçer (hemen silinmez,
- * 5 günlük FIFO'ya bırakılır) — bkz. eskiKayitlariTemizle_.
+ * otomatik akışla simetrik şekilde TAMAMLANDI'ya geçer (silinmez, 5 günlük
+ * FIFO'ya bırakılır) — bkz. eskiKayitlariTemizle_.
  * @return {string} Kullanıcıya gösterilecek özet.
  */
 function pesEdilenleriTekrarDene_() {
-  var sheet = getOrCreateRetrySheet_();
-  var pesEdilenler = retryTumSatirlariOku_(sheet)
+  var sheet = getOrCreateQueueSheet_();
+  var pesEdilenler = kuyrukTumSatirlariOku_(sheet)
     .filter(function (row) {
       return row.durum === RETRY_DURUM.PES_EDILDI;
     })
@@ -735,21 +802,25 @@ function pesEdilenleriTekrarDene_() {
 // ============================================================================
 
 /**
- * Kuyruğun anlık durumunu özetler: kaç satır BEKLIYOR/ISLENIYOR/PES_EDILDI/
- * TAMAMLANDI, en eski `ilk_hata_zamani` kaç saat önce, kaç trigger kayıtlı.
- * `pesEdilen` satırlar ASLA otomatik silinmez (bkz. eskiKayitlariTemizle_) —
- * bu sayı > 0 ise kullanıcının Sheets'te elle kaydetmesi gereken, sistemin
- * işleyemediği harcama(lar) olduğu anlamına gelir. `isleniyor` sayısının bir
- * tarama sürmüyorken > 0 görünmesi, önceki bir execution'ın ortasında
- * kesintiye uğrayıp satırın ISLENIYOR'da takılı kaldığına işaret edebilir
- * (periyodik bir self-heal YOK, bkz. dosya başı yorum) — bu durumda satır
- * elle BEKLIYOR'a çekilip trigger yeniden kurulmalıdır (silinmemeli).
+ * Kuyruğun anlık retry durumunu özetler: kaç satır BEKLIYOR/ISLENIYOR/
+ * PES_EDILDI/TAMAMLANDI (toplam mesaj sayısı DEĞİL, sadece durum dolu olan
+ * retry-takipli satırlar), en eski `ilk_hata_zamani` kaç saat önce, kaç
+ * trigger kayıtlı. `pesEdilen` satırlar ASLA otomatik temizlenmez (bkz.
+ * eskiKayitlariTemizle_) — bu sayı > 0 ise kullanıcının Sheets'te elle
+ * kaydetmesi gereken, sistemin işleyemediği harcama(lar) olduğu anlamına
+ * gelir. `isleniyor` sayısının bir tarama sürmüyorken > 0 görünmesi, önceki
+ * bir execution'ın ortasında kesintiye uğrayıp satırın ISLENIYOR'da takılı
+ * kaldığına işaret edebilir (periyodik bir self-heal YOK, bkz. dosya başı
+ * yorum) — bu durumda satır elle BEKLIYOR'a çekilip trigger yeniden
+ * kurulmalıdır (silinmemeli).
  * @return {Object}
  */
 function yenidenDenemeKuyruguDurumu() {
-  var sheet = getOrCreateRetrySheet_();
+  var sheet = getOrCreateQueueSheet_();
   var simdi = new Date();
-  var satirlar = retryTumSatirlariOku_(sheet);
+  var satirlar = kuyrukTumSatirlariOku_(sheet).filter(function (r) {
+    return r.durum; // sadece retry-takipli (durum dolu) satırlar
+  });
 
   var bekleyen = satirlar.filter(function (r) {
     return r.durum === RETRY_DURUM.BEKLIYOR;
@@ -779,7 +850,7 @@ function yenidenDenemeKuyruguDurumu() {
   ).length;
 
   var ozet = {
-    toplamSatir: satirlar.length,
+    retryTakipliSatir: satirlar.length,
     bekleyen: bekleyen.length,
     isleniyor: isleniyor.length,
     pesEdilen: pesEdilen.length,
