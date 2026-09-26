@@ -429,6 +429,82 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   Gecikmeli başarıda cevaba "⏳ Gecikmeli işlendi (X saat önce gönderilmişti):"
   notu eklenir (kullanıcı kararı — hangi eski mesajın cevaplandığı belli olsun).
 
+**FIFO silme toplu (batch) hale getirildi (2026-09-26, prod'da bulunan
+sorun):** `eskiKayitlariTemizle_` ilk sürümde silinecek her satır için AYRI
+bir `sheet.deleteRow(...)` çağırıyordu (N satır → N çağrı). Kullanıcı bunu
+prod'da fark etti ve düzeltilmesini istedi. Düzeltme: silinecek satır
+numaraları ardışık aralıklara gruplanıp her aralık için TEK bir
+`sheet.deleteRows(start, sayi)` çağrılıyor — FIFO'da eski satırlar tipik
+olarak sheet'in üst kısmında bitişik durduğundan bu genelde 1-2 çağrıya iner.
+Aralıklar en alttakinden (satır no'su en büyük) başlanarak silinir, aksi
+halde bir aralığı silmek henüz silinmemiş daha ÜSTTEKİ aralıkların satır
+numaralarını kaydırırdı.
+
+**Prod'da gerçek bir 503/UNAVAILABLE mesajı hiç kuyruklanmadı — kök sebep ve
+düzeltme (2026-09-26):** Kullanıcı deploy sonrası gerçek bir Gemini 503
+("high demand"/`UNAVAILABLE`) hatası aldı ama kullanıcıya beklenen
+`GEMINI_YOGUN_KULLANICI_MESAJI` YERİNE generic "⚠️ Bir hata oluştu, işlem
+tamamlanamadı: Gemini API hatası..." mesajı gitti VE `telegram_queue`'da o
+satırın `durum`'u hiç güncellenmedi (retry hiç kuyruklanmadı).
+
+**Teşhis:** `doPost`'un `mesajHatasi.gecici` dalındaki
+`yenidenDenemeKuyruguEkle_` çağrısı bir hata fırlattığında (`catch
+(kuyrukHatasi)`), kod `kuyrukHatasi`'yi SADECE loglayıp (Stackdriver'a — ki bu
+proje GCP'ye bağlı değil, bkz. "Bilinen varsayımlar" bölümündeki "Logları
+göremiyorum" notu, yani kullanıcı bu logu HİÇ göremez) `mesajHatasi`'yi (yani
+orijinal Gemini hatasını) yeniden fırlatıyordu — bu, kullanıcının Telegram'da
+gördüğü mesajın neden orijinal Gemini hata metniyle BİREBİR aynı olduğunu
+açıklıyor: gerçek arıza (kuyruklama/trigger hatası) tamamen maskeleniyordu.
+
+Gerçek arızanın kendisi muhtemelen `yenidenDenemeKuyruguEkle_ >
+zamanliTetikleyiciKur_`'daki `ScriptApp.newTrigger(...).create()` çağrısının
+başarısız olmasıydı (kullanıcının kendi hipotezi, doğru çıktı): trigger
+oluşturma `script.scriptapp` OAuth kapsamını gerektirir; bu kapsam Retry.js
+eklenmeden önce projede HİÇ kullanılmıyordu (Sheets/LockService kapsamları
+zaten Queue.js/isYeniUpdate_'ten beri kullanımdaydı). **Kritik nokta: `clasp
+push`/`clasp deploy` kod içindeki yeni kapsam ihtiyacını Web App'in ("Execute
+as: Me") önceden verilmiş yetkilendirme onayına EKLEMEZ** — sahibinin Apps
+Script editöründen HERHANGİ bir fonksiyonu bir kez elle çalıştırıp çıkan
+"Review permissions" ekranını (artık trigger yönetimini de içeren güncel
+kapsam listesiyle) onaylaması gerekir. Bu onay proje+kullanıcı bazlıdır, belirli
+bir deployment'a bağlı değildir — bir kez verilince tüm deployment'lar (Web
+App dahil) aynı onayı kullanır.
+
+**Uygulanan iki düzeltme:**
+1. `retry/RetryCore.js > yenidenDenemeKuyruguEkle_`: `zamanliTetikleyiciKur_`
+   çağrısı artık kilit/sheet işlemlerinden ÖNCE ve ayrı denenir; başarısız
+   olursa `zamanlanmisTekrarDenemeyiIsle`'daki AYNI "trigger kurulamadı → PES
+   ET" deseniyle doğrudan `pesEdildiKuyruguEkleVeBildir_`'e devredilir —
+   mesaj artık bu spesifik arızada da asla sessizce kaybolmuyor/generic hataya
+   düşmüyor, doğrudan `PES_EDILDI` + kullanıcı bildirimi alıyor.
+2. `Main.js > doPost`'taki HER İKİ `catch (kuyrukHatasi)` bloğu artık
+   `mesajHatasi`'yi (orijinal Gemini hatasını) DEĞİL, `kuyrukHatasi.message`'ı
+   da içeren birleşik bir hata fırlatıyor — bu SADECE beklenmeyen/başka bir
+   kuyruklama arızasında (kilit zaman aşımı vb.) devreye girer ve artık
+   kullanıcının Telegram'da gördüğü mesaj gerçek sebebi gösteriyor; GCP
+   bağlanmadan Stackdriver'a bakılamadığı için bu, kullanıcının tek
+   görünürlük kanalı.
+
+**Kullanıcı için sonraki adım (deploy + yetkilendirme):** kod düzeltildi ama
+prod'da hâlâ ESKİ (arızalı) kod çalışıyor — `clasp push` + mevcut deployment
+ID'ye `clasp deploy -i <id>` ile yeni versiyon basılmalı. Ayrıca (kod
+düzeltmesinden BAĞIMSIZ olarak, çünkü asıl trigger yetkisi sorunu hâlâ
+sürüyor olabilir) editörden herhangi bir fonksiyon (`webhookDurumu` gibi) bir
+kez elle çalıştırılıp izin ekranı onaylanmalı — bu adım atlanırsa trigger
+kurulumu yine başarısız olur, ama artık en azından mesaj kaybolmaz
+(PES_EDILDI'ye düşer, kullanıcı bilgilendirilir).
+
+**İkinci, bağımsız bir gözlem (henüz doğrulanmadı):** `clasp deployments` bu
+projede 2 deployment gösteriyor — biri `@HEAD`, biri versiyon numarasına
+pinlenmiş (kullanıcının bu turda `clasp deploy -i <id>` ile güncellediği).
+Telegram webhook'unun HANGİ deployment'ın URL'ine kayıtlı olduğu (yani
+`CONFIG.webAppUrl` Script Property'sinin hangi ID'yi işaret ettiği)
+doğrulanmalı — `webhookDurumu()` çıktısındaki `url` alanı bu ID'yi verir.
+Eşleşmiyorsa (webhook eski/başka bir deployment'a kayıtlıysa) bu kod
+düzeltmesi push edilse bile prod'a hiç yansımaz; bu durumda `WEBAPP_URL`
+Script Property'si doğru deployment ID'sine güncellenip `kurulumWebhook()`
+yeniden çalıştırılmalı.
+
 **Bilinçli kabul edilen kısıt:** periyodik bir "self-heal" tarayıcı olmadığı
 için, bir satırın `ISLENIYOR`'da takılı kalması (execution ortasında kesinti)
 teorik olarak mümkün — bu, yalnızca BAŞKA bir mesaj kuyruklandığında/trigger
@@ -840,19 +916,28 @@ fonksiyon adları, çünkü onlar kararlı.
   desteklenecek?
 - `gemini-3.5-flash` gerçekten kullanılabilir bir model adı mı, yoksa çalışan
   güncel bir model adıyla mı değiştirilmeli?
-- `retry/RetryCore.js` + `retry/RetryCommands.js` (Katman 2 tekrar deneme)
-  henüz `clasp push` ile deploy edilmedi ve gerçek Telegram trafiğiyle uçtan
-  uca doğrulanmadı (yalnızca Node mock harness'ıyla, bkz. yukarıdaki "Gemini
-  API geçici/kalıcı hatalarına karşı Katman 2" bölümü) — deploy sonrası
-  gerçek bir 503/429 senaryosuyla ya da geçici `CONFIG.geminiModel` bozarak
-  (404) doğrulanmalı; ayrıca `yenidenDenemeKuyruguDurumu()` çıktısı ilk
-  gerçek kullanımdan sonra kontrol edilmeli.
-- **Script'lerin modülerleştirilmesi (2026-09-26)** henüz `clasp push` ile
-  deploy edilmedi: `Main.js`/`Retry.js` içeriği `Logging.js`/`Gemini.js`/
-  `Telegram.js`/`Main.js`/`retry/RetryCore.js`/`retry/RetryCommands.js`'e
-  bölündü (davranış DEĞİŞMEDİ, sadece dosya sınırları). `.clasp.json`'daki
-  `rootDir: ""` + `skipSubdirectories: false` alt dizin push'unu desteklediği
-  için config değişikliği gerekmiyor, ama `clasp push` sonrası Apps Script
-  editöründe `retry/RetryCore` ve `retry/RetryCommands` dosyalarının
-  göründüğü ve eski `Retry.js`'in silindiği elle doğrulanmalı; sonra bir
-  `/komutlar` ve bir harcama mesajıyla uçtan uca smoke-test yapılmalı.
+- **Retry sistemi + modülerleştirme deploy edildi (2026-09-26,
+  `clasp deploy -i AKfycbxf7fYiksz8ZUNR_ymZKG-k-v0cJCQE3U_eHibUUK_q9NDvXmUFJ9mGT0nqBPZqmBdmqQ` → versiyon 13)
+  ama gerçek trafikte 2 sorun bulundu ve düzeltildi** (bkz. yukarıdaki "FIFO
+  silme toplu (batch) hale getirildi" ve "Prod'da gerçek bir 503/UNAVAILABLE
+  mesajı hiç kuyruklanmadı" notları): (1) FIFO temizlik artık `deleteRows`
+  ile toplu siliyor, (2) `yenidenDenemeKuyruguEkle_` artık trigger
+  kurulamazsa PES_EDILDI'ye düşüyor VE `doPost`'un kuyruklama-hatası
+  fallback'i artık gerçek hatayı gösteriyor (maskelenmiyor). **Bu düzeltmeler
+  henüz push/deploy edilmedi** — sıradaki adım:
+  1. `clasp push` + `clasp deploy -i AKfycbxf7fYiksz8ZUNR_ymZKG-k-v0cJCQE3U_eHibUUK_q9NDvXmUFJ9mGT0nqBPZqmBdmqQ`
+     (AYNI deployment ID'ye — yeni bir deployment YARATMAYIN, aksi halde
+     webhook'un işaret ettiği URL değişmeden kalır ve yeni kod hiç
+     çalışmaz).
+  2. Apps Script editöründen `webhookDurumu()` çalıştırıp `url` alanındaki
+     deployment ID'nin yukarıdaki ID ile eşleştiği doğrulanmalı (`clasp
+     deployments` çıktısında 2 deployment var — biri `@HEAD`, biri bu
+     versiyonlu ID; hangisi webhook'a kayıtlı olduğu netleşmeli).
+  3. Editörden herhangi bir fonksiyon (`webhookDurumu` yeterli) bir kez elle
+     çalıştırılıp çıkan "Review permissions" ekranı onaylanmalı — trigger
+     oluşturma (`ScriptApp.newTrigger`) için gereken `script.scriptapp`
+     kapsamının onaylanmış olduğundan emin olmak için (push/deploy bunu
+     otomatik yapmaz).
+  4. Gerçek bir 503/UNAVAILABLE ya da geçici `CONFIG.geminiModel` bozarak
+     (404) uçtan uca doğrulanmalı; `yenidenDenemeKuyruguDurumu()` çıktısı ve
+     `telegram_queue`'daki satırın `durum` sütunu kontrol edilmeli.

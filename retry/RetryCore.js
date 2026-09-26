@@ -251,12 +251,21 @@ function satiriPesEdildiOlarakIsaretle_(sheet, row, hataMesaji, simdi) {
  * eskiKayitlariTemizleKilitli_ üzerinden) `Queue.js > kuyrugaEkle_`'den HER
  * mesajda çağrılır — böylece Gemini hiç hata vermese bile temizlik düzenli
  * fırsat bulur.
+ *
+ * Silme İŞLEMİ TOPLU yapılır (kullanıcı kararı, 2026-09-26): tek tek
+ * `deleteRow` çağırmak yerine, silinecek satır numaraları ardışık aralıklara
+ * gruplanıp her aralık için TEK bir `deleteRows(start, sayi)` çağrılır — FIFO
+ * doğası nedeniyle eski satırlar tipik olarak sheet'in üst kısmında bitişik
+ * durduğundan bu genelde N çağrı yerine 1-2 çağrıya iner (aktif/pes edilmiş
+ * satırlar araya girip bitişikliği bölmediği sürece). Aralıklar EN ALTTAKİNDEN
+ * (satır no'su en büyük) başlanarak silinir — aksi halde bir aralığı silmek,
+ * henüz silinmemiş daha ÜSTTEKİ aralıkların satır numaralarını kaydırırdı.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {Date} simdi
  */
 function eskiKayitlariTemizle_(sheet, simdi) {
   var satirlar = kuyrukTumSatirlariOku_(sheet);
-  var silinecekler = satirlar
+  var silinecekSatirNolari = satirlar
     .filter(function (row) {
       if (
         row.durum === RETRY_DURUM.BEKLIYOR ||
@@ -271,14 +280,36 @@ function eskiKayitlariTemizle_(sheet, simdi) {
           : new Date(row.mesajTarihi).getTime();
       return simdi.getTime() - mesajMs > RETRY_TEMIZLIK_ESIK_MS;
     })
+    .map(function (row) {
+      return row.satirNo;
+    })
     .sort(function (a, b) {
-      return b.satirNo - a.satirNo; // azalan sırayla sil, index kaymasını önler
+      return a - b;
     });
 
-  silinecekler.forEach(function (row) {
-    log_("yenidenDeneme.fifo-temizlik", { updateId: row.updateId, satirNo: row.satirNo });
-    sheet.deleteRow(row.satirNo);
-  });
+  if (silinecekSatirNolari.length === 0) {
+    return;
+  }
+
+  var araliklar = [];
+  var baslangic = silinecekSatirNolari[0];
+  var bitis = silinecekSatirNolari[0];
+  for (var i = 1; i < silinecekSatirNolari.length; i++) {
+    if (silinecekSatirNolari[i] === bitis + 1) {
+      bitis = silinecekSatirNolari[i];
+    } else {
+      araliklar.push([baslangic, bitis]);
+      baslangic = bitis = silinecekSatirNolari[i];
+    }
+  }
+  araliklar.push([baslangic, bitis]);
+
+  for (var j = araliklar.length - 1; j >= 0; j--) {
+    var start = araliklar[j][0];
+    var sayi = araliklar[j][1] - araliklar[j][0] + 1;
+    log_("yenidenDeneme.fifo-temizlik", { baslangicSatir: start, satirSayisi: sayi });
+    sheet.deleteRows(start, sayi);
+  }
 }
 
 /**
@@ -383,6 +414,16 @@ function zamanliTetikleyiciSil_(triggerId) {
  * (savunma amaçlı, normalde olmaması gereken bir durumda) bulunamazsa mesajı
  * kaybetmemek için tam bir satır olarak eklenir. 1 saat sonrasına ilk
  * trigger'ı kurar.
+ *
+ * Trigger kurulumu (ScriptApp.newTrigger) BİLEREK kilit/sheet işlemlerinden
+ * ÖNCE ve ayrı denenir: başarısız olursa (örn. bu proje ilk kez trigger
+ * oluşturmayı deniyorsa gereken `script.scriptapp` yetkisi henüz Web App
+ * deployment'ının yetkilendirme onayına dahil edilmemiş olabilir — kod
+ * push/deploy etmek bu onayı YENİLEMEZ, sahibinin editörden herhangi bir
+ * fonksiyonu bir kez elle çalıştırıp izin ekranını onaylaması gerekir) mesaj
+ * asla sessizce kaybolmaz: `zamanlanmisTekrarDenemeyiIsle`'daki AYNI "trigger
+ * kurulamadı → PES ET" deseniyle doğrudan `pesEdildiKuyruguEkleVeBildir_`'e
+ * devredilir (kullanıcı bildirim alır, satır PES_EDILDI'ye yazılır).
  * @param {number} updateId
  * @param {number|string} chatId
  * @param {string} text
@@ -396,6 +437,23 @@ function yenidenDenemeKuyruguEkle_(
   mesajTarihiSaniye,
   hataMesaji,
 ) {
+  var ilkAsama = 1;
+  var gecikmeSaat = sonrakiGecikmeSaat_(ilkAsama);
+  var triggerId;
+  try {
+    triggerId = zamanliTetikleyiciKur_(gecikmeSaat);
+  } catch (triggerErr) {
+    logHata_("yenidenDeneme.trigger-kurulamadi-ILK-DENEME", triggerErr);
+    pesEdildiKuyruguEkleVeBildir_(
+      updateId,
+      chatId,
+      text,
+      mesajTarihiSaniye,
+      "Trigger kurulamadı: " + triggerErr.message,
+    );
+    return;
+  }
+
   var lock = LockService.getScriptLock();
   lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
   try {
@@ -403,9 +461,6 @@ function yenidenDenemeKuyruguEkle_(
     var simdi = new Date();
     eskiKayitlariTemizle_(sheet, simdi);
 
-    var ilkAsama = 1;
-    var gecikmeSaat = sonrakiGecikmeSaat_(ilkAsama);
-    var triggerId = zamanliTetikleyiciKur_(gecikmeSaat);
     var sonrakiDenemeZamani = new Date(simdi.getTime() + gecikmeSaat * 60 * 60 * 1000);
 
     var alanlar = {
