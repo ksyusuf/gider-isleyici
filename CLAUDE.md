@@ -468,11 +468,19 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
    - `/yardim` — botun nasıl kullanılacağını, örnek mesaj formatlarını
      anlatan statik bir metin döner
 2. **`doPost`'ta `/` ile başlayan komutları Gemini'ye göndermeden doğrudan
-   işlemek** — **UYGULANDI (2026-08-31):** `Main.js > islemKomut_` +
-   `doPost`'taki erken-çıkış dalı. Komutlar: `/son [N]`, `/toplam [N]`,
+   işlemek** — **UYGULANDI (2026-08-31, genişletildi 2026-09-26):**
+   `Main.js > islemKomut_` + `doPost`'taki erken-çıkış dalı. Komutlar:
+   `/son [N]`, `/toplam [N]`, `/pesedilenler`, `/pesedilenleridene`,
    `/komutlar` (komut listesi); tanınmayan `/xxx` → "Komut bulunamadı" +
-   aynı liste (`KOMUT_LISTESI_METNI`). Sıfır Gemini API çağrısı/maliyeti —
-   Node üzerinde mock Sheets ile doğrulandı.
+   aynı liste (`KOMUT_LISTESI_METNI`). `/pesedilenler` ve
+   `/pesedilenleridene` (`Retry.js`) kullanıcının açık isteğiyle eklendi —
+   sırasıyla `PES_EDILDI` (bkz. Retry.js bölümü) mesajları listeler ve
+   hepsini topluca (Katman 1 ile, yeni trigger KURMADAN) şimdi tekrar dener;
+   başarılı olanlar `TAMAMLANDI`'ya geçer, başarısız kalanlar `PES_EDILDI`'de
+   kalır (silinmez). **İstisna:** `/pesedilenleridene` diğer komutların
+   aksine Gemini'ye gider (bilinçli, kullanıcı talebiyle tetiklenen manuel bir
+   toplu deneme). Diğer komutlar sıfır Gemini API çağrısı/maliyeti — Node
+   üzerinde mock Sheets/Apps Script globalleriyle doğrulandı.
 3. **`/iptal` — son eklenen harcamayı geri alma** — **ASKIYA ALINDI
    (2026-08-31, kullanıcı kararı).** Orijinal fikir "son eklenen satır =
    `SHEET_LAYOUT.START_ROW`" varsayımına dayanıyordu; bu artık geçerli
