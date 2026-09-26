@@ -59,6 +59,9 @@ değeri taşıyor.
   - `Queue.js`: Fitness projesiyle paylaşılan Telegram mesaj kuyruğu
     (`kuyrugaEkle_`, bkz. aşağıdaki "Fitness projesiyle paylaşılan Telegram
     mesaj kuyruğu" bölümü).
+  - `Retry.js`: Gemini API geçici/kalıcı hatalarına karşı Katman 2 — mesaj
+    bazlı, tek seferlik trigger'larla saatlik tekrar deneme (bkz. aşağıdaki
+    "Gemini API geçici/kalıcı hatalarına karşı Katman 2" bölümü).
 - Sheets sütun sözleşmesi repo kökündeki `services/SheetsGoogle.py`'den
   (eski Python/Flask akışı) tespit edildi: `D=TARİH, E=TUTAR, F=FİRMA, G=TÜR,
 H=MALZEME, I=AÇIKLAMA`, veri `D3`'ten başlıyor, her eklemede TARİH'e göre
@@ -273,6 +276,127 @@ eklenebilir.
   getiriyor, loglar timeout'tan çok backoff'lu retry'a işaret ediyor.
   `webhookDurumu()` çıktısı timeout gösterirse yeniden değerlendirilmeli.
 
+## Gemini API geçici/kalıcı hatalarına karşı Katman 2: mesaj bazlı tekrar deneme (Retry.js, 2026-09-25)
+
+**Problem:** `callGemini_` (Main.js) Gemini'nin yoğun olduğu saatlerde (HTTP 503
+"high demand", bkz. yukarıdaki "Test durumu" bölümü) sık sık hata veriyordu ve
+bu hata hiç retry edilmeden doğrudan kullanıcıya "⚠️ Bir hata oluştu" olarak
+gidiyordu — harcama Sheets'e hiç yazılmadan kayboluyordu, kullanıcı mesajı elle
+tekrar göndermek zorunda kalıyordu. Kullanıcının isteği: Gemini'nin
+yorumlayamaması (ZORUNLU NETLİK KURALI'nın netleştirme sorması) DIŞINDA hiçbir
+durumda elle tekrar göndermeye gerek kalmamalı; Gemini'nin yoğun olduğu
+periyotlar saatler sürebildiği için (5-10 dk'lık kısa retry'lar yetersiz) hem
+hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
+
+**İki katmanlı çözüm:**
+
+- **Katman 1 (senkron, `Main.js`):** `callGeminiIleTekrarDeneme_` her Gemini
+  çağrısını en fazla `GEMINI_MAX_DENEME` (3) kez dener, denemeler arası kısa
+  bekleme (`GEMINI_RETRY_GECIKMELER_MS`: 2sn, 5sn). Hata sınıflandırması
+  `hataGeciciMi_` ile **blacklist** mantığında: sadece `GEMINI_KALICI_HTTP_KODLARI`
+  (400/401/403/404) **kalıcı** sayılır ve deneme hakkı harcamadan hemen
+  fırlatılır; ağ hatası, boş/beklenmeyen yanıt, bilinmeyen durum kodu dahil
+  geri kalan HER ŞEY varsayılan olarak **geçici** kabul edilir (kullanıcının
+  "yorumlanamaması DIŞINDA" isteğiyle uyumlu — yorumlayamama zaten bir
+  exception değil, `islemSonuclariniBirlestir_`'in normal metin-cevap akışı).
+  3 deneme de geçici hatayla tükenirse son hataya `err.gecici = true` işareti
+  konur — bu, `doPost`'un mesajı Katman 2'ye devretme kararının sinyalidir.
+  `doPost`'un ve `Retry.js`'in Gemini çağırma + fonksiyon çalıştırma + cevap
+  birleştirme mantığı **tek bir ortak fonksiyonda** (`mesajiIsleVeYanitla_`)
+  toplanır — iki yerde ayrı ayrı yazılmaz.
+
+- **Katman 2 (mesaj bazlı, tek seferlik trigger'lar — `Retry.js`):** Katman 1
+  tükendiğinde mesaj `yeniden_deneme_kuyrugu` sekmesine (harcama tablosuyla
+  aynı spreadsheet'te, `telegram_queue`'dan TAMAMEN AYRI, ona hiç dokunulmaz)
+  yazılır ve **o mesaja özel, tek seferlik** bir Apps Script trigger kurulur.
+  **Kasıtlı olarak sürekli/periyodik bir trigger YOK** (kullanıcı kararı, ilk
+  önerilen "tek kalıcı periyodik tarayıcı" tasarımı reddedildi) — her trigger,
+  bir mesajın gerçekten başarısız kalmasının doğal bir sonucu olarak kurulur.
+  Aşama gecikmeleri `RETRY_BACKOFF_SAAT = [1, 1, 2, 2, 4]` (saat, 5 aşama,
+  toplam ~10 saat). Trigger ateşlendiğinde yine Katman 1 (3 hızlı deneme)
+  çalışır; başarısızsa BİR SONRAKİ aşama için yeni trigger kurulur ve
+  ÖNCEKİ (artık ateşlenmiş) trigger silinir — Apps Script'in tek seferlik
+  (`after`) trigger'ları ateşlendikten sonra KENDİLİĞİNDEN silinmediği için bu
+  temizlik atlanırsa proje trigger kotası (~20) sessizce tükenir.
+
+  **5. (son, 4 saatlik) aşama da başarısız olursa sistem PES EDER** — 6. bir
+  trigger KURULMAZ. Satır `durum=PES_EDILDI` olarak işaretlenir (**ASLA
+  SİLİNMEZ** — bkz. aşağıdaki "FIFO temizlik" notu) ve kullanıcıya hem o
+  mesaja özel bir bildirim hem de kuyrukta biriken TÜM `PES_EDILDI`
+  satırlarının toplu bir özeti gönderilir (`pesEdildiBildirimGonder_`).
+  Kalıcı bir HTTP hatası (400/401/403/404) alınırsa hiç retry denenmeden aynı
+  PES_EDILDI yoluna girilir (`pesEdildiKuyruguEkleVeBildir_`, `doPost`'taki
+  ikinci catch dalı). Sistemin en fazla ~10 saat içinde ya çözüleceği ya da
+  pes edeceği garanti olduğundan, önceki taslaktaki "1 hafta sonra özel
+  bildirim" fikri gereksiz hale geldi ve uygulanmadı — PES_EDILDI + toplu
+  bildirim onun doğrudan yerini aldı.
+
+  **"Yüksek talep" kısayolu (2026-09-26, kullanıcı isteği):** Gemini'nin
+  yaşanan gerçek hatalarının büyük çoğunluğu şu spesifik gövdeyle geliyor:
+  `{"error":{"code":503,"message":"This model is currently experiencing high
+  demand...","status":"UNAVAILABLE"}}`. Bu durumda sebep zaten KESİN olarak
+  biliniyor (model o an aşırı yüklü) ve birkaç saniye arayla 3 kez hızlı
+  tekrar denemek (Katman 1) bunu değiştirmez — sorun saatler sürebiliyor.
+  `Main.js > hataYuksekTalepMi_` gövdedeki `error.status === "UNAVAILABLE"`
+  alanını tespit eder; tespit edilirse `callGeminiIleTekrarDeneme_` HİÇ
+  beklemeden (sleep yok, kalan deneme hakları harcanmadan) doğrudan Katman
+  2'ye devreder. Gövde parse edilemez ya da farklı bir 503/geçici hata ise
+  (örn. ağ zaman aşımı) normal 3-denemeli Katman 1 akışı aynen çalışmaya
+  devam eder — bu kısayol SADECE bu spesifik, kesin-teşhisli duruma özeldir.
+
+  **FIFO temizlik ve "asla unutma" ilkesi (2026-09-26, kullanıcı düzeltmesi
+  — kritik, yeniden gevşetilmemeli):** İlk sürümde `eskiKayitlariTemizle_` 5
+  günden eski TÜM satırları (durumu ne olursa olsun) siliyordu — bu, bir
+  `PES_EDILDI` satırın (yani hiçbir yere kaydedilmemiş bir harcamanın) 5 gün
+  sonra sessizce ve kalıcı olarak kaybolması demekti. Kullanıcı bunu açıkça
+  reddetti: **"pes edilen mesajlar asla silinmemeli, harcamaları unutup da
+  kayıt altına almamak olmaz."** Düzeltme: `eskiKayitlariTemizle_` artık
+  SADECE `durum=TAMAMLANDI` olan satırları (ve sadece onlar 5 günden eskiyse)
+  siler. `BEKLIYOR`/`ISLENIYOR` (hâlâ aktif iş) ve `PES_EDILDI` (kullanıcının
+  elle kaydetmesi gereken bir harcama) yaşı ne olursa olsun ASLA otomatik
+  silinmez. Bunun doğal sonucu: başarıyla işlenen bir satır artık HEMEN
+  silinmiyor — `TAMAMLANDI`'ya geçiyor ve ancak 5 gün sonra temizleniyor
+  (`zamanlanmisTekrarDenemeyiIsle`'ın başarı dalı, `satiriSil_` yerine
+  `satiriGuncelle_` kullanıyor). `yenidenDenemeKuyruguDurumu()` artık
+  `tamamlanan` sayısını da raporluyor.
+
+  Gecikmeli başarıda cevaba "⏳ Gecikmeli işlendi (X saat önce gönderilmişti):"
+  notu eklenir (kullanıcı kararı — hangi eski mesajın cevaplandığı belli olsun).
+
+**Bilinçli kabul edilen kısıt:** periyodik bir "self-heal" tarayıcı olmadığı
+için, bir satırın `ISLENIYOR`'da takılı kalması (execution ortasında kesinti)
+teorik olarak mümkün — bu, yalnızca BAŞKA bir mesaj kuyruklandığında/trigger
+ateşlendiğinde (`eskiKayitlariTemizle_` çağrısı üzerinden değil, elle fark
+edilip düzeltilmesi gereken bir durum olarak) ortaya çıkar. `PES_EDILDI`
+satırlar için böyle bir "gecikme" riski YOK artık — onlar zaten hiçbir zaman
+otomatik silinmiyor (bkz. yukarıdaki FIFO notu), sonsuza kadar (ya da
+kullanıcı elle müdahale edene kadar) kuyrukta kalırlar, bu KASITLI. Kişisel/
+düşük hacimli tek kullanıcılık bot için `ISLENIYOR` takılma riski kabul
+edilebilir bulundu — `yenidenDenemeKuyruguDurumu()` (webhookDurumu() deseniyle
+tutarlı, elle çalıştırılan teşhis fonksiyonu) `isleniyor` sayısının 0'dan
+büyük görünmesini böyle bir takılmanın sinyali olarak yorumlar.
+
+**Doğrulama:** Repo'da otomatik test altyapısı yok; mevcut projede yerleşik
+"Node üzerinde mock Apps Script globalleriyle doğrulandı" deseniyle (scratch,
+commit edilmeyen bir harness) uçtan uca doğrulandı — 41/41 kontrol PASS:
+`sonrakiGecikmeSaat_`/`sonAsamaMi_`'nin 1-1-2-2-4 dizisi, `hataGeciciMi_`
+tablo testi, `callGeminiIleTekrarDeneme_`'in 503'te 3 deneme + `gecici=true`
+/ 401'de tek denemede fırlatma davranışı, tam 5 aşamalık escalation zinciri
+(her aşamada doğru gecikme + son aşamada PES_EDILDI + trigger sızıntısı
+olmaması), erken başarı senaryosu (satır silinir + gecikmeli-not), toplu
+pes-edildi bildirimi, 5 günlük FIFO temizlik, ve `doPost` regresyonu (`/komutlar`,
+dedup, kalıcı hata yönlendirmesi, geçici hata kuyruklanması). **Gerçek
+Telegram trafiğiyle uçtan uca smoke-test henüz yapılmadı** — deploy (`clasp
+push` + Manage deployments → New version, kullanıcı tarafından) sonrası
+gerçek bir 503/429 senaryosuyla ya da geçici olarak `CONFIG.geminiModel`'i
+geçersiz bir isimle değiştirip 404 alarak doğrulanmalı.
+
+**Sonraki oturum için not:** bu tasarımın kabul edilmeden önceki bir sürümünde
+(kullanıcı tarafından reddedildi) tek bir kalıcı periyodik tarayıcı trigger
+öneriliyordu; kullanıcı açıkça "sürekli bir trigger istemiyorum... her
+başarısız ai isteği sonrası [mesaja özel] trigger kurulacak" dedi — bu karar
+yeniden tartışılmadan korunmalı.
+
 ## Bilinen varsayımlar / kırılgan noktalar
 
 - `SHEET_LAYOUT` (`START_ROW=3`, `START_COL=4`/D, `NUM_COLS=6`) tamamen
@@ -313,6 +437,14 @@ eklenebilir.
   an) döner — bu sadece bir yedek/geriye dönük durumdur; asıl "bugün" mantığı
   Gemini'nin `systemInstruction`'daki ZAMAN BAĞLAMI kurallarına göre mesaj
   zamanını mutlak tarihe çevirip göndermesine dayanır.
+- `Retry.js` script başına en fazla 1 canlı trigger/aktif (BEKLIYOR) mesaj
+  varsayımıyla tasarlandı (bkz. "Gemini API geçici/kalıcı hatalarına karşı
+  Katman 2" bölümü) — Apps Script'in ~20 trigger kotasına tek kullanıcılık
+  düşük hacimli kullanımda pratikte hiç yaklaşılmaz, ama Gemini saatlerce
+  kesik kalıp kullanıcı bu süre içinde çok sayıda mesaj gönderirse teorik
+  olarak yaklaşılabilir; o noktada `zamanliTetikleyiciKur_` başarısız olursa
+  kod mesajı sessizce kaybetmek yerine PES_EDILDI'ye düşürüp kullanıcıyı
+  bilgilendirir (veri kaybı yok, sadece otomatik retry durur).
 
 ## Geliştirme fikirleri (öneriler)
 
@@ -600,3 +732,10 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
   desteklenecek?
 - `gemini-3.5-flash` gerçekten kullanılabilir bir model adı mı, yoksa çalışan
   güncel bir model adıyla mı değiştirilmeli?
+- `Retry.js` (Katman 2 tekrar deneme) henüz `clasp push` ile deploy edilmedi
+  ve gerçek Telegram trafiğiyle uçtan uca doğrulanmadı (yalnızca Node mock
+  harness'ıyla, bkz. yukarıdaki "Gemini API geçici/kalıcı hatalarına karşı
+  Katman 2" bölümü) — deploy sonrası gerçek bir 503/429 senaryosuyla ya da
+  geçici `CONFIG.geminiModel` bozarak (404) doğrulanmalı; ayrıca
+  `yenidenDenemeKuyruguDurumu()` çıktısı ilk gerçek kullanımdan sonra
+  kontrol edilmeli.

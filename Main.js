@@ -3,18 +3,22 @@
  * Gider İşleyici — Telegram + Gemini Function Calling Botu (Orkestrasyon)
  * ============================================================================
  * Gemini generateContent REST çağrısı, mesaj zamanına göre dinamik kurulan
- * systemInstruction, Telegram sendMessage/doPost entegrasyonu ve geliştirici
- * yardımcı fonksiyonları (webhook kurulum/kaldırma) burada tutulur.
+ * systemInstruction, Telegram sendMessage/doPost entegrasyonu, Gemini geçici
+ * hatalarına karşı senkron tekrar deneme (Katman 1) ve geliştirici yardımcı
+ * fonksiyonları (webhook kurulum/kaldırma) burada tutulur.
  *
  * İlgili diğer dosyalar:
  *   - Config.js: CONFIG, SHEET_LAYOUT, TOOLS (Gemini function declarations)
  *   - Expenses.js: Sheets erişim yardımcıları + harcamaEkle / sonHarcamalariGetir / sonHarcamalariTopla
  *   - Queue.js: Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (kuyrugaEkle_)
+ *   - Retry.js: Gemini geçici/kalıcı hatalarında Katman 2 — mesaj bazlı, tek
+ *     seferlik trigger'larla saatlik tekrar deneme (1-1-2-2-4 saat), pes
+ *     etme + toplu bildirim, 5 günlük FIFO temizlik
  *
  * Bölümler:
  *   1. FUNCTION_MAP — Gemini fonksiyon adı → gerçek implementasyon eşlemesi
  *   2. Loglama (log_ / logHata_)
- *   3. Gemini REST entegrasyonu
+ *   3. Gemini REST entegrasyonu (+ Katman 1 tekrar deneme)
  *   4. Telegram entegrasyonu (update dedup + doPost)
  *   5. Geliştirici yardımcı fonksiyonları (webhook kurulum/durum/kaldırma)
  */
@@ -314,7 +318,10 @@ function callGemini_(userText, mesajZamaniSaniye) {
   log_("gemini.yanit", { http: statusCode, sureMs: sureMs, govde: govde });
 
   if (statusCode !== 200) {
-    throw new Error("Gemini API hatası (HTTP " + statusCode + "): " + govde);
+    var httpHata = new Error("Gemini API hatası (HTTP " + statusCode + "): " + govde);
+    httpHata.httpStatus = statusCode; // hataGeciciMi_'nin geçici/kalıcı ayrımı için
+    httpHata.httpBody = govde; // hataYuksekTalepMi_'nin "UNAVAILABLE" tespiti için
+    throw httpHata;
   }
 
   var json = JSON.parse(govde);
@@ -340,6 +347,101 @@ function callGemini_(userText, mesajZamaniSaniye) {
   );
 
   return candidate.content.parts;
+}
+
+/** Katman 1 (senkron) tekrar deneme parametreleri. */
+const GEMINI_MAX_DENEME = 3;
+const GEMINI_RETRY_GECIKMELER_MS = [2000, 5000]; // 3 deneme arası: 2sn, 5sn bekleme
+const GEMINI_KALICI_HTTP_KODLARI = [400, 401, 403, 404];
+
+/**
+ * Bir Gemini hatasının GEÇİCİ (retry'a değer) mi yoksa KALICI (retry asla
+ * düzeltmez) mi olduğuna karar verir. BLACKLIST mantığı: sadece
+ * GEMINI_KALICI_HTTP_KODLARI'nda listelenen HTTP durumları kalıcı sayılır;
+ * ağ hatası, boş/beklenmeyen yanıt ya da bilinmeyen bir durum kodu dahil geri
+ * kalan HER ŞEY varsayılan olarak GEÇİCİ kabul edilir. Bu, kullanıcının
+ * "Gemini'nin veriyi yorumlayamaması DIŞINDA hiçbir şey için elle tekrar
+ * göndermek istemiyorum" isteğiyle uyumlu — yorumlayamama zaten bir exception
+ * değil, ayrı ve değişmeyen bir akıştır (bkz. islemSonuclariniBirlestir_).
+ * @param {Error} err
+ * @return {boolean}
+ */
+function hataGeciciMi_(err) {
+  if (err && typeof err.httpStatus === "number") {
+    return GEMINI_KALICI_HTTP_KODLARI.indexOf(err.httpStatus) === -1;
+  }
+  return true;
+}
+
+/**
+ * Gemini'nin "model şu an yüksek talepte" (aşırı yüklenme) yanıtını tespit
+ * eder — gövdede `error.status === "UNAVAILABLE"` olarak gelir, örnek:
+ * `{"error":{"code":503,"message":"This model is currently experiencing
+ * high demand...","status":"UNAVAILABLE"}}`. Bu KNOWN bir sebep: modelin o an
+ * meşgul olduğunu zaten biliyoruz, birkaç saniye arayla 3 kez tekrar denemek
+ * durumu değiştirmez (sorun saatler sürebiliyor, bkz. CLAUDE.md test notları)
+ * — bu yüzden Katman 1'in hızlı denemelerini boşuna harcamak yerine doğrudan
+ * Katman 2'ye (saatlik trigger) geçilir. Gövde parse edilemezse (beklenmeyen
+ * format) güvenli tarafta kalınıp false döner — normal Katman 1 akışı işler.
+ * @param {Error} err
+ * @return {boolean}
+ */
+function hataYuksekTalepMi_(err) {
+  if (!err || typeof err.httpBody !== "string") {
+    return false;
+  }
+  try {
+    var json = JSON.parse(err.httpBody);
+    return !!(json && json.error && json.error.status === "UNAVAILABLE");
+  } catch (parseErr) {
+    return false;
+  }
+}
+
+/**
+ * callGemini_'yi en fazla maxDeneme kez dener. Kalıcı bir hata alınırsa deneme
+ * hakkı harcamadan hemen fırlatır. "Yüksek talep" (hataYuksekTalepMi_) tespit
+ * edilirse de aynı şekilde hemen çıkılır — sebep zaten bilindiği için hızlı
+ * tekrar denemeler anlamsızdır, doğrudan Katman 2'ye devredilir. Diğer geçici
+ * hatalarda (ağ hatası, bilinmeyen durum vb.) normal şekilde beklenip tekrar
+ * denenir. Tüm denemeler/erken çıkış sonrası hataya `gecici=true` işareti
+ * koyup fırlatır — bu işaret, çağıranın (doPost / Retry.js) mesajı Katman
+ * 2'ye (saatlik tekrar deneme kuyruğu) devretmesi gerektiğinin sinyalidir.
+ * @param {string} userText
+ * @param {number} mesajZamaniSaniye
+ * @param {number} maxDeneme
+ * @param {Array<number>} gecikmelerMs maxDeneme-1 uzunluğunda, denemeler arası bekleme (ms).
+ * @return {Array<Object>} candidates[0].content.parts dizisi.
+ */
+function callGeminiIleTekrarDeneme_(userText, mesajZamaniSaniye, maxDeneme, gecikmelerMs) {
+  var sonHata;
+  for (var i = 0; i < maxDeneme; i++) {
+    try {
+      return callGemini_(userText, mesajZamaniSaniye);
+    } catch (err) {
+      sonHata = err;
+      if (!hataGeciciMi_(err)) {
+        throw err; // kalıcı — deneme hakkı harcamadan hemen çık
+      }
+      if (hataYuksekTalepMi_(err)) {
+        log_("gemini.yuksek-talep-dogrudan-katman2", {
+          deneme: i + 1,
+          hata: err.message,
+        });
+        break; // sebep bilindiği için daha fazla hızlı deneme yapılmaz
+      }
+      log_("gemini.tekrar-deneme", {
+        deneme: i + 1,
+        maxDeneme: maxDeneme,
+        hata: err.message,
+      });
+      if (i < maxDeneme - 1) {
+        Utilities.sleep(gecikmelerMs[i]);
+      }
+    }
+  }
+  sonHata.gecici = true;
+  throw sonHata;
 }
 
 // ============================================================================
@@ -570,6 +672,39 @@ function isYeniUpdate_(updateId) {
 }
 
 /**
+ * Katman 1'in (callGeminiIleTekrarDeneme_) tüm denemeleri geçici bir hatayla
+ * tükendiğinde kullanıcıya gönderilen mesaj — mevcut generic "⚠️ Bir hata
+ * oluştu" yerine, mesajın KAYBOLMADIĞINI ve otomatik tekrar denenecek
+ * olduğunu açıkça belirtir.
+ */
+const GEMINI_YOGUN_KULLANICI_MESAJI =
+  "⏳ Gemini API şu an yoğun ya da erişilemiyor. Mesajınız kaybolmadı — " +
+  "otomatik olarak tekrar denenecek, sonucu ayrıca bildireceğim. Elle " +
+  "tekrar göndermenize gerek yok.";
+
+/**
+ * Bir kullanıcı mesajını uçtan uca işler: Gemini'yi (Katman 1 tekrar
+ * denemeyle) çağırır, dönen fonksiyon çağrılarını çalıştırır, sonucu tek bir
+ * Telegram cevap metnine birleştirir. `doPost`'un ilk (canlı) denemesi VE
+ * `Retry.js > zamanlanmisTekrarDenemeyiIsle`'ın gecikmeli denemeleri AYNI bu
+ * fonksiyonu kullanır — Gemini çağırma/fonksiyon çalıştırma/cevap birleştirme
+ * mantığı iki yerde ayrı ayrı yazılmaz. Hata durumunda (geçici ya da kalıcı)
+ * olduğu gibi fırlatır; Telegram'a ne gönderileceğine çağıran karar verir.
+ * @param {string} text
+ * @param {number} mesajZamaniSaniye
+ * @return {string}
+ */
+function mesajiIsleVeYanitla_(text, mesajZamaniSaniye) {
+  var parts = callGeminiIleTekrarDeneme_(
+    text,
+    mesajZamaniSaniye,
+    GEMINI_MAX_DENEME,
+    GEMINI_RETRY_GECIKMELER_MS,
+  );
+  return islemSonuclariniBirlestir_(parts);
+}
+
+/**
  * Apps Script Web App POST giriş noktası — Telegram webhook'u buraya bağlanır.
  * @param {GoogleAppsScript.Events.DoPost} e
  * @return {GoogleAppsScript.Content.TextOutput}
@@ -651,8 +786,60 @@ function doPost(e) {
       return respondOk_();
     }
 
-    var parts = callGemini_(text, message.date);
-    var cevapMetni = islemSonuclariniBirlestir_(parts);
+    var cevapMetni;
+    try {
+      cevapMetni = mesajiIsleVeYanitla_(text, message.date);
+    } catch (mesajHatasi) {
+      if (mesajHatasi.gecici) {
+        // Katman 1'in GEMINI_MAX_DENEME denemesi de geçici bir hatayla
+        // tükendi — mesaj Katman 2'ye (Retry.js, saatlik tekrar deneme)
+        // devredilir; kullanıcıya generic hata YERİNE dostça bir bilgi gider.
+        try {
+          yenidenDenemeKuyruguEkle_(
+            update.update_id,
+            chatId,
+            text,
+            message.date,
+            mesajHatasi.message,
+          );
+          sendTelegramMessage_(chatId, GEMINI_YOGUN_KULLANICI_MESAJI);
+          log_("doPost.tamamlandi", {
+            toplamSureMs: Date.now() - baslangic,
+            sonuc: "kuyruklandi",
+          });
+          return respondOk_();
+        } catch (kuyrukHatasi) {
+          // Kuyruğa da yazılamadı (örn. trigger kotası doldu) — mevcut
+          // generic hata akışına düş, en azından kullanıcı bilgilendirilir.
+          logHata_("doPost.kuyruklama-basarisiz-KRITIK", kuyrukHatasi);
+          throw mesajHatasi;
+        }
+      }
+      if (!hataGeciciMi_(mesajHatasi)) {
+        // Kalıcı hata (400/401/403/404) — retry hiç denenmeden PES_EDILDI
+        // olarak kuyruğa yazılır; kullanıcıya hem bu mesaj için hem de
+        // kuyrukta biriken diğer pes-edilmiş mesajlar için toplu bildirim
+        // gönderilir (bkz. Retry.js > pesEdildiBildirimGonder_).
+        try {
+          pesEdildiKuyruguEkleVeBildir_(
+            update.update_id,
+            chatId,
+            text,
+            message.date,
+            mesajHatasi.message,
+          );
+          log_("doPost.tamamlandi", {
+            toplamSureMs: Date.now() - baslangic,
+            sonuc: "kalici-hata-bildirildi",
+          });
+          return respondOk_();
+        } catch (kuyrukHatasi) {
+          logHata_("doPost.kalici-hata-kuyruklama-basarisiz", kuyrukHatasi);
+          throw mesajHatasi;
+        }
+      }
+      throw mesajHatasi; // sınıflandırılmamış/beklenmeyen hata → mevcut generic akış
+    }
     log_("doPost.cevap", cevapMetni);
     sendTelegramMessage_(chatId, cevapMetni);
     log_("doPost.tamamlandi", { toplamSureMs: Date.now() - baslangic });
