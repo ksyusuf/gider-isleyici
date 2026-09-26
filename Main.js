@@ -209,10 +209,21 @@ function doPost(e) {
           });
           return respondOk_();
         } catch (kuyrukHatasi) {
-          // Kuyruğa da yazılamadı (örn. trigger kotası doldu) — mevcut
-          // generic hata akışına düş, en azından kullanıcı bilgilendirilir.
+          // Trigger kurulamaması artık yenidenDenemeKuyruguEkle_ içinde
+          // kendi başına PES_EDILDI'ye düşüyor (bkz. retry/RetryCore.js) —
+          // buraya SADECE beklenmeyen başka bir hata (örn. kilit zaman
+          // aşımı, Sheets erişim hatası) düşerse gelinir. Kullanıcıya
+          // ORİJİNAL Gemini hatası YERİNE gerçek sebep gösterilir — aksi
+          // halde asıl arıza (kuyruklama hatası) Stackdriver'a gömülüp
+          // görünmez kalırdı (bkz. CLAUDE.md "Logları göremiyorum" notu).
           logHata_("doPost.kuyruklama-basarisiz-KRITIK", kuyrukHatasi);
-          throw mesajHatasi;
+          throw new Error(
+            "Otomatik tekrar deneme kuyruğa eklenemedi: " +
+              kuyrukHatasi.message +
+              " (orijinal Gemini hatası: " +
+              mesajHatasi.message +
+              ")",
+          );
         }
       }
       if (!hataGeciciMi_(mesajHatasi)) {
@@ -235,7 +246,13 @@ function doPost(e) {
           return respondOk_();
         } catch (kuyrukHatasi) {
           logHata_("doPost.kalici-hata-kuyruklama-basarisiz", kuyrukHatasi);
-          throw mesajHatasi;
+          throw new Error(
+            "Kalıcı hata kuyruğa yazılamadı: " +
+              kuyrukHatasi.message +
+              " (orijinal Gemini hatası: " +
+              mesajHatasi.message +
+              ")",
+          );
         }
       }
       throw mesajHatasi; // sınıflandırılmamış/beklenmeyen hata → mevcut generic akış
