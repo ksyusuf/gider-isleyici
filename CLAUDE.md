@@ -390,10 +390,26 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   ilgileniyor, 5 günden eski satırların silinmesi onun için sorun DEĞİL.**
   Bu bilgiyle `eskiKayitlariTemizle_` son haline geldi: `durum` boş (retry'a
   hiç girmemiş sıradan mesajlar) ya da `TAMAMLANDI` olan ve `date` sütunundan
-  itibaren 5 günden eski satırlar **gerçekten silinir** (`sheet.deleteRow`).
+  itibaren **10 günden** (kullanıcı kararıyla 5'ten 10'a çıkarıldı) eski
+  satırlar **gerçekten silinir** (`sheet.deleteRow`).
   `BEKLIYOR`/`ISLENIYOR`/`PES_EDILDI` kuralı (yukarıdaki paragraf) bu
   netleşmeden BAĞIMSIZ ve DEĞİŞMEDEN duruyor — o üç durumun asla silinmemesi
   Fitness'ten değil, "bir harcamayı unutma" ilkesinden kaynaklanıyor.
+
+  **Temizlik ne zaman tetiklenir? (2026-09-26, ikinci düzeltme):** İlk
+  sürümde `eskiKayitlariTemizle_` SADECE üç retry-özel giriş noktasından
+  (`yenidenDenemeKuyruguEkle_`, `pesEdildiKuyruguEkleVeBildir_`,
+  `zamanlanmisTekrarDenemeyiIsle`) çağrılıyordu — yani sadece bir Gemini
+  hatası yaşandığında. Bunun dürüst sonucu: **Gemini hiç hata vermezse
+  temizlik de hiç çalışmaz**, `telegram_queue` sınırsız büyür — ki bu tam
+  olarak kullanıcının "o sayfa gereksiz çok şişmesin" isteğiyle çelişirdi.
+  Düzeltme: `Retry.js > eskiKayitlariTemizleKilitli_` (diğer üç giriş
+  noktasıyla AYNI script kilidini kullanan bir sarmalayıcı) artık
+  `Queue.js > kuyrugaEkle_`'den de çağrılıyor — bu, konusu/başarısı fark
+  etmeksizin HER metin mesajında çalıştığı için, Gemini hiç hata vermese
+  bile temizlik düzenli fırsat bulur. Sürekli bir trigger kurulmadı (madde
+  hâlâ geçerli) — bunun yerine zaten var olan, her mesajda çalışan bir
+  fonksiyona (kuyrugaEkle_) ucuz bir ek adım eklendi.
 
   Gecikmeli başarıda cevaba "⏳ Gecikmeli işlendi (X saat önce gönderilmişti):"
   notu eklenir (kullanıcı kararı — hangi eski mesajın cevaplandığı belli olsun).
@@ -413,17 +429,22 @@ büyük görünmesini böyle bir takılmanın sinyali olarak yorumlar.
 
 **Doğrulama:** Repo'da otomatik test altyapısı yok; mevcut projede yerleşik
 "Node üzerinde mock Apps Script globalleriyle doğrulandı" deseniyle (scratch,
-commit edilmeyen bir harness) uçtan uca doğrulandı — 35/35 kontrol PASS:
+commit edilmeyen bir harness) uçtan uca doğrulandı — 38/38 kontrol PASS:
 `telegram_queue` başlık göçü (4→11 kolon, A:D verisi korunarak) ve
 `kuyrugaEkle_`'nin sadece A:D yazdığı, `sonrakiGecikmeSaat_`/`sonAsamaMi_`'nin
 1-1-2-2-4 dizisi, `hataGeciciMi_` tablo testi, "yüksek talep" kısayolunun tek
 çağrıda (sleep'siz) çıktığı, `doPost`'ta geçici/kalıcı hatanın `kuyrugaEkle_`'nin
-AZ ÖNCE eklediği AYNI satırı bulup güncellediği (yeni satır oluşmadığı), tam 5
-aşamalık escalation zinciri (paylaşılan sekme üzerinde, her aşamada doğru
-gecikme + son aşamada PES_EDILDI + trigger sızıntısı olmaması), erken başarı
-senaryosu (TAMAMLANDI'ya geçer, silinmez), FIFO'nun TAMAMLANDI/boş-durumlu 5
-günden eski satırları GERÇEKTEN sildiği ama PES_EDILDI/BEKLIYOR/ISLENIYOR'u
-yaşı ne olursa olsun hiç silmediği, toplu pes-edildi bildirimi, ve
+AZ ÖNCE eklediği AYNI satırı bulup güncellediği (yeni satır oluşmadığı — bu
+kontrol özellikle gerçekçi/"şimdi"ye yakın mesaj tarihleriyle yapıldı, çünkü
+eski sabit bir test tarihi `eskiKayitlariTemizleKilitli_`'nin satırı erken
+silip savunma-amaçlı "bulunamadı" dalını tetikleyip sonucu yanlışlıkla
+maskeleyebiliyordu), tam 5 aşamalık escalation zinciri (paylaşılan sekme
+üzerinde, her aşamada doğru gecikme + son aşamada PES_EDILDI + trigger
+sızıntısı olmaması), erken başarı senaryosu (TAMAMLANDI'ya geçer, silinmez),
+FIFO'nun TAMAMLANDI/boş-durumlu 10 günden eski satırları GERÇEKTEN sildiği
+ama PES_EDILDI/BEKLIYOR/ISLENIYOR'u yaşı ne olursa olsun hiç silmediği,
+`kuyrugaEkle_`'nin Gemini'ye hiç gidilmeden de (sıradan bir mesajda) temizliği
+tetikledigi, toplu pes-edildi bildirimi, ve
 `/pesedilenler`+`/pesdene` komutları. **Gerçek Telegram trafiğiyle uçtan uca
 smoke-test henüz yapılmadı** — deploy (`clasp push` + Manage deployments →
 New version, kullanıcı tarafından) sonrası gerçek bir 503/429 senaryosuyla ya
@@ -770,6 +791,30 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
         mesajlar için (geriye dönük, `message_id` kaydı olmadığı ve muhtemelen
         48 saati de geçmiş olduğu için) kod tarafından yapılacak bir şey yok —
         kullanıcı Telegram istemcisinde elle silebilir.
+
+## Az-token doğrulama rehberi (başka bilgisayar / yeni agentic oturum için)
+
+Bu proje için ağır bir Node mock-Apps-Script harness'ı geliştirme sırasında
+scratchpad'te (repo dışında, kalıcı değil) yazıldı — başka bir bilgisayarda ya
+da yeni bir oturumda o harness'a erişim YOK ve yeniden kurmak ciddi token
+harcar. Kullanıcı elle/gözle doğrulama isterse aşağıdaki tablo, doğrudan Apps
+Script editöründen (sıfır Node/mock maliyeti) hangi fonksiyonun nasıl
+kontrol edileceğini özetler — bu satırın ötesine geçip yeniden büyük bir test
+harness'ı kurmaya ÇALIŞILMAMALI, önce bu tablo denenmeli.
+
+| Kontrol edilecek | Nasıl (editörden elle çalıştır / Logger'a bak) |
+| --- | --- |
+| Aşama gecikmeleri (`RETRY_BACKOFF_SAAT`) | `sonrakiGecikmeSaat_(3)` çalıştır → `RETRY_BACKOFF_SAAT[2]` ile aynı değeri döner (dizi değişirse referans da değişir, sabit sayı değil) |
+| Son aşama tespiti | `sonAsamaMi_(RETRY_BACKOFF_SAAT.length)` → `true`; bir eksiği → `false` |
+| Hata sınıflandırması | `hataGeciciMi_({httpStatus:404})` → `false`; `hataGeciciMi_({})` → `true` |
+| "Yüksek talep" tespiti | `hataYuksekTalepMi_({httpBody:'{"error":{"status":"UNAVAILABLE"}}'})` → `true` |
+| Kuyruğun canlı özeti | `yenidenDenemeKuyruguDurumu()` çalıştır, Logger'daki `bekleyen`/`pesEdilen`/`tamamlanan`/`kayitliTriggerSayisi` alanlarına bak |
+| Escalation zinciri (uçtan uca, gerçek) | `CONFIG.geminiModel`'i geçici olarak geçersiz bir isimle değiştir, gerçek bir Telegram mesajı gönder; `telegram_queue`'da o satırın `durum`/`deneme_asamasi`/`sonraki_deneme_zamani` sütunlarının saatlerle ilerleyişini izle |
+| FIFO temizlik | Sheet'e elle `RETRY_TEMIZLIK_ESIK_MS`'den eski bir tarih + `durum=TAMAMLANDI` satırı ekle, herhangi bir mesaj gönderip `kuyrugaEkle_`'yi tetikle, satırın silindiğini gör |
+| `/pesedilenler`, `/pesdene`, `/komutlar` | Doğrudan Telegram'dan gönder, cevabı oku |
+
+Kod satır numaralarına referans VERİLMEDİ (kod değiştikçe kayar) — yalnızca
+fonksiyon adları, çünkü onlar kararlı.
 
 ## Sonraki oturum için açık sorular
 
