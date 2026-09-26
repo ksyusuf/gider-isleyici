@@ -5,8 +5,12 @@ Google Gemini function calling ile ayrıştırıp doğrudan bir Google Sheets
 tablosuna (D:I sütunları) yazan bir Google Apps Script Web App'idir. Proje
 eskiden bir Google Docs + Python/Flask akışı olarak başlamıştı; o akış
 tamamen kaldırıldı (bkz. "Geçmiş" bölümü) ve bu proje artık tek başına bu
-Apps Script akışından ibaret — ayrı bir alt dizin yapısı yok, tüm dosyalar
-repo kökünde. Detaylı kurulum için `README.md`'ye bakın.
+Apps Script akışından ibaret. Dosyaların çoğu repo kökünde; `retry/` alt
+dizini SADECE Katman 2 (otomatik tekrar deneme) dosyalarını gruplar (bkz.
+aşağıdaki "Ne yapıldı" ve "Script'lerin modülerleştirilmesi" bölümleri) —
+Apps Script tüm dosyaları aynı global scope'ta çalıştırdığı için alt dizin
+kullanımının çalışma zamanı etkisi yoktur, sadece organizasyoneldir. Detaylı
+kurulum için `README.md`'ye bakın.
 
 ## Önemli Kurallar
 
@@ -42,26 +46,36 @@ değeri taşıyor.
 
 ## Ne yapıldı
 
-- Kod, sorumluluklarına göre 4 dosyaya bölündü (Apps Script'te tüm dosyalar
+- Kod, sorumluluklarına göre 9 dosyaya bölündü (Apps Script'te tüm dosyalar
   aynı global scope'u paylaştığı için fonksiyon adları dosyalar arası
   sorunsuz erişilebilir — fonksiyon bildirimleri proje genelinde hoisted
-  olur):
+  olur; `retry/` bir alt dizin olsa da bu paylaşımı DEĞİŞTİRMEZ, bkz.
+  "Script'lerin modülerleştirilmesi (2026-09-26)" bölümü):
   - `Config.js`: `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini
     function declarations şeması).
   - `Expenses.js`: Sheets D:I yazma/okuma/sıralama yardımcıları +
     `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla`.
-  - `Main.js`: `FUNCTION_MAP`, Gemini REST entegrasyonu (v1beta
+  - `Logging.js`: ortak loglama (`log_`, `logHata_`) — her dosyanın
+    kullandığı cross-cutting altyapı.
+  - `Gemini.js`: `FUNCTION_MAP`, Gemini REST entegrasyonu (v1beta
     `generateContent`, function calling, her istekte mesajın Telegram'a
-    gönderildiği ana göre dinamik kurulan bir `systemInstruction`), Telegram
-    entegrasyonu, `update_id` bazlı dedup (`isYeniUpdate_`) ve `doPost`
-    webhook giriş noktası, geliştirici yardımcı fonksiyonları
-    (`kurulumWebhook`, `webhookDurumu`, `webhookSil`).
+    gönderildiği ana göre dinamik kurulan bir `systemInstruction`), Katman 1
+    (senkron) tekrar deneme, `mesajiIsleVeYanitla_`.
+  - `Telegram.js`: Telegram gönderim (`sendTelegramMessage_`), `/` komut
+    işleme (`islemKomut_`), Gemini sonuçlarını cevaba birleştirme
+    (`islemSonuclariniBirlestir_`).
+  - `Main.js`: `update_id` bazlı dedup (`isYeniUpdate_`) ve `doPost` webhook
+    giriş noktası, geliştirici yardımcı fonksiyonları (`kurulumWebhook`,
+    `webhookDurumu`, `webhookSil`).
   - `Queue.js`: Fitness projesiyle paylaşılan Telegram mesaj kuyruğu
     (`kuyrugaEkle_`, bkz. aşağıdaki "Fitness projesiyle paylaşılan Telegram
     mesaj kuyruğu" bölümü).
-  - `Retry.js`: Gemini API geçici/kalıcı hatalarına karşı Katman 2 — mesaj
-    bazlı, tek seferlik trigger'larla saatlik tekrar deneme (bkz. aşağıdaki
-    "Gemini API geçici/kalıcı hatalarına karşı Katman 2" bölümü).
+  - `retry/RetryCore.js`: Gemini API geçici/kalıcı hatalarına karşı Katman 2
+    — otomatik motor: mesaj bazlı, tek seferlik trigger'larla saatlik tekrar
+    deneme (bkz. aşağıdaki "Gemini API geçici/kalıcı hatalarına karşı
+    Katman 2" bölümü).
+  - `retry/RetryCommands.js`: Katman 2'nin manuel komut yüzeyi
+    (`/pesedilenler`, `/pesdene`) ve teşhis (`yenidenDenemeKuyruguDurumu`).
 - Sheets sütun sözleşmesi repo kökündeki `services/SheetsGoogle.py`'den
   (eski Python/Flask akışı) tespit edildi: `D=TARİH, E=TUTAR, F=FİRMA, G=TÜR,
 H=MALZEME, I=AÇIKLAMA`, veri `D3`'ten başlıyor, her eklemede TARİH'e göre
@@ -215,8 +229,9 @@ Referans: [Telegram Bot API](https://core.telegram.org/bots/api),
 
 ## Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (2026-09-04)
 
-> **Güncelleme (2026-09-26):** Bu sekmenin şeması genişletildi — `Retry.js`
-> (Katman 2 tekrar deneme) kendi sekmesini AÇMAK YERİNE bu `telegram_queue`
+> **Güncelleme (2026-09-26):** Bu sekmenin şeması genişletildi — `retry/RetryCore.js`
+> (Katman 2 tekrar deneme, bkz. "Script'lerin modülerleştirilmesi" bölümü)
+> kendi sekmesini AÇMAK YERİNE bu `telegram_queue`
 > sekmesine E:K kolonları ekledi (kullanıcı kararı). A:D (aşağıdaki
 > `QUEUE_HEADERS`in ilk 4 elemanı) Fitness için DEĞİŞMEDEN sabit kalıyor;
 > detay için aşağıdaki "Gemini API geçici/kalıcı hatalarına karşı Katman 2"
@@ -239,8 +254,8 @@ tüketicisi olarak kaldı (Fitness'i de webhook'a taşımak ayrıca değerlendir
 ve reddedildi — Telegram bir bota birden fazla webhook kaydına izin vermiyor,
 `setWebhook` ikinci çağrıda öncekini SESSİZCE değiştirir, bu da hangi projenin
 kazanacağı deploy sırasına bağlı, daha da öngörülemez bir "race condition"
-yaratırdı). Bunun yerine `doPost`, mesaj başarıyla parse edildikten hemen sonra
-(satır ~636, `/` komut kontrolünden ÖNCE) `kuyrugaEkle_(update.update_id,
+yaratırdı). Bunun yerine `Main.js > doPost`, mesaj başarıyla parse edildikten
+hemen sonra (`/` komut kontrolünden ÖNCE) `kuyrugaEkle_(update.update_id,
 chatId, text, message.date)` çağırır — bu, harcama/spor konusu fark etmeksizin
 her metin mesajını `getTargetSpreadsheet_()`'in döndürdüğü spreadsheet'teki
 `telegram_queue` sekmesine (`update_id, chat_id, text, date` kolonları) ham
@@ -283,9 +298,9 @@ eklenebilir.
   getiriyor, loglar timeout'tan çok backoff'lu retry'a işaret ediyor.
   `webhookDurumu()` çıktısı timeout gösterirse yeniden değerlendirilmeli.
 
-## Gemini API geçici/kalıcı hatalarına karşı Katman 2: mesaj bazlı tekrar deneme (Retry.js, 2026-09-25)
+## Gemini API geçici/kalıcı hatalarına karşı Katman 2: mesaj bazlı tekrar deneme (retry/RetryCore.js, 2026-09-25)
 
-**Problem:** `callGemini_` (Main.js) Gemini'nin yoğun olduğu saatlerde (HTTP 503
+**Problem:** `callGemini_` (Gemini.js) Gemini'nin yoğun olduğu saatlerde (HTTP 503
 "high demand", bkz. yukarıdaki "Test durumu" bölümü) sık sık hata veriyordu ve
 bu hata hiç retry edilmeden doğrudan kullanıcıya "⚠️ Bir hata oluştu" olarak
 gidiyordu — harcama Sheets'e hiç yazılmadan kayboluyordu, kullanıcı mesajı elle
@@ -297,7 +312,7 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
 
 **İki katmanlı çözüm:**
 
-- **Katman 1 (senkron, `Main.js`):** `callGeminiIleTekrarDeneme_` her Gemini
+- **Katman 1 (senkron, `Gemini.js`):** `callGeminiIleTekrarDeneme_` her Gemini
   çağrısını en fazla `GEMINI_MAX_DENEME` (3) kez dener, denemeler arası kısa
   bekleme (`GEMINI_RETRY_GECIKMELER_MS`: 2sn, 5sn). Hata sınıflandırması
   `hataGeciciMi_` ile **blacklist** mantığında: sadece `GEMINI_KALICI_HTTP_KODLARI`
@@ -308,11 +323,11 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   exception değil, `islemSonuclariniBirlestir_`'in normal metin-cevap akışı).
   3 deneme de geçici hatayla tükenirse son hataya `err.gecici = true` işareti
   konur — bu, `doPost`'un mesajı Katman 2'ye devretme kararının sinyalidir.
-  `doPost`'un ve `Retry.js`'in Gemini çağırma + fonksiyon çalıştırma + cevap
-  birleştirme mantığı **tek bir ortak fonksiyonda** (`mesajiIsleVeYanitla_`)
-  toplanır — iki yerde ayrı ayrı yazılmaz.
+  `doPost`'un ve `retry/RetryCore.js`'in Gemini çağırma + fonksiyon çalıştırma +
+  cevap birleştirme mantığı **tek bir ortak fonksiyonda** (`Gemini.js >
+  mesajiIsleVeYanitla_`) toplanır — iki yerde ayrı ayrı yazılmaz.
 
-- **Katman 2 (mesaj bazlı, tek seferlik trigger'lar — `Retry.js`):** Katman 1
+- **Katman 2 (mesaj bazlı, tek seferlik trigger'lar — `retry/RetryCore.js`):** Katman 1
   tükendiğinde **o mesaja özel, tek seferlik** bir Apps Script trigger kurulur.
   **Kasıtlı olarak sürekli/periyodik bir trigger YOK** (kullanıcı kararı, ilk
   önerilen "tek kalıcı periyodik tarayıcı" tasarımı reddedildi) — her trigger,
@@ -333,7 +348,7 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   son_deneme_zamani, son_hata_mesaji, trigger_id` (E:K, gider-isleyici'nin
   KENDİ retry bookkeeping'i — Fitness bunları hiç okumaz). `doPost` zaten HER
   metin mesajı için Gemini'den ÖNCE `kuyrugaEkle_`'yi çağırıyordu (A:D'yi
-  doldurur); Gemini başarısız olduğunda `Retry.js > kuyrukSatiriniUpdateIdIleBul_`
+  doldurur); Gemini başarısız olduğunda `retry/RetryCore.js > kuyrukSatiriniUpdateIdIleBul_`
   AYNI satırı `update_id` ile bulup E:K'yı doldurur — YENİ bir satır asla
   eklenmez (bulunamazsa, olmaması gereken bir durum için savunma amaçlı yeni
   satır eklenir). Mevcut (retry kolonları eklenmeden önce oluşmuş, 4 kolonlu)
@@ -360,7 +375,7 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   demand...","status":"UNAVAILABLE"}}`. Bu durumda sebep zaten KESİN olarak
   biliniyor (model o an aşırı yüklü) ve birkaç saniye arayla 3 kez hızlı
   tekrar denemek (Katman 1) bunu değiştirmez — sorun saatler sürebiliyor.
-  `Main.js > hataYuksekTalepMi_` gövdedeki `error.status === "UNAVAILABLE"`
+  `Gemini.js > hataYuksekTalepMi_` gövdedeki `error.status === "UNAVAILABLE"`
   alanını tespit eder; tespit edilirse `callGeminiIleTekrarDeneme_` HİÇ
   beklemeden (sleep yok, kalan deneme hakları harcanmadan) doğrudan Katman
   2'ye devreder. Gövde parse edilemez ya da farklı bir 503/geçici hata ise
@@ -403,7 +418,7 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   hatası yaşandığında. Bunun dürüst sonucu: **Gemini hiç hata vermezse
   temizlik de hiç çalışmaz**, `telegram_queue` sınırsız büyür — ki bu tam
   olarak kullanıcının "o sayfa gereksiz çok şişmesin" isteğiyle çelişirdi.
-  Düzeltme: `Retry.js > eskiKayitlariTemizleKilitli_` (diğer üç giriş
+  Düzeltme: `retry/RetryCore.js > eskiKayitlariTemizleKilitli_` (diğer üç giriş
   noktasıyla AYNI script kilidini kullanan bir sarmalayıcı) artık
   `Queue.js > kuyrugaEkle_`'den de çağrılıyor — bu, konusu/başarısı fark
   etmeksizin HER metin mesajında çalıştığı için, Gemini hiç hata vermese
@@ -478,7 +493,7 @@ yeniden tartışılmadan korunmalı.
   gönderilmiyor, doğrudan biçimlendirilip Telegram'a yollanıyor (kullanıcının
   orijinal spesifikasyonu buydu). Daha "insansı" özet cevaplar isteniyorsa bu
   tasarım kararı gözden geçirilebilir.
-- Loglama: `Main.js`'teki `log_(etiket, veri)` / `logHata_(etiket, err)`
+- Loglama: `Logging.js`'teki `log_(etiket, veri)` / `logHata_(etiket, err)`
   yardımcıları tüm akışı `[etiket] gövde` biçiminde basar (doPost, dedup,
   Gemini istek/yanıt/parts, fonksiyon çağrıları, Telegram yanıtı, Sheets
   hedefi/satırı). **Sır asla loglanmaz** — Gemini istek URL'i API key, Telegram
@@ -497,7 +512,7 @@ yeniden tartışılmadan korunmalı.
   an) döner — bu sadece bir yedek/geriye dönük durumdur; asıl "bugün" mantığı
   Gemini'nin `systemInstruction`'daki ZAMAN BAĞLAMI kurallarına göre mesaj
   zamanını mutlak tarihe çevirip göndermesine dayanır.
-- `Retry.js` script başına en fazla 1 canlı trigger/aktif (BEKLIYOR) mesaj
+- `retry/RetryCore.js` script başına en fazla 1 canlı trigger/aktif (BEKLIYOR) mesaj
   varsayımıyla tasarlandı (bkz. "Gemini API geçici/kalıcı hatalarına karşı
   Katman 2" bölümü) — Apps Script'in ~20 trigger kotasına tek kullanıcılık
   düşük hacimli kullanımda pratikte hiç yaklaşılmaz, ama Gemini saatlerce
@@ -529,12 +544,13 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
      anlatan statik bir metin döner
 2. **`doPost`'ta `/` ile başlayan komutları Gemini'ye göndermeden doğrudan
    işlemek** — **UYGULANDI (2026-08-31, genişletildi 2026-09-26):**
-   `Main.js > islemKomut_` + `doPost`'taki erken-çıkış dalı. Komutlar:
-   `/son [N]`, `/toplam [N]`, `/pesedilenler`, `/pesedilenleridene`,
+   `Telegram.js > islemKomut_` + `doPost`'taki erken-çıkış dalı. Komutlar:
+   `/son [N]`, `/toplam [N]`, `/pesedilenler`, `/pesdene`,
    `/komutlar` (komut listesi); tanınmayan `/xxx` → "Komut bulunamadı" +
    aynı liste (`KOMUT_LISTESI_METNI`). `/pesedilenler` ve
-   `/pesedilenleridene` (`Retry.js`) kullanıcının açık isteğiyle eklendi —
-   sırasıyla `PES_EDILDI` (bkz. Retry.js bölümü) mesajları listeler ve
+   `/pesdene` (`retry/RetryCommands.js`) kullanıcının açık isteğiyle eklendi —
+   sırasıyla `PES_EDILDI` (bkz. "Gemini API geçici/kalıcı hatalarına karşı
+   Katman 2" bölümü) mesajları listeler ve
    hepsini topluca (Katman 1 ile, yeni trigger KURMADAN) şimdi tekrar dener;
    başarılı olanlar `TAMAMLANDI`'ya geçer, başarısız kalanlar `PES_EDILDI`'de
    kalır (silinmez). **İstisna:** `/pesedilenleridene` diğer komutların
@@ -585,7 +601,7 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
    basit "her önemli olay bir satır" mantığıyla ayrı bir Sheets sekmesine log
    yazmak, teknik olmayan bir kullanıcı için de görünürlük sağlar.
 10. **Few-shot örnekleriyle `systemInstruction`'ı güçlendirme** — mevcut
-    prompt kural-tabanlı; `Main.js`'teki `SYSTEM_INSTRUCTION_TEMPLATE`'e 2-3
+    prompt kural-tabanlı; `Gemini.js`'teki `SYSTEM_INSTRUCTION_TEMPLATE`'e 2-3
     somut örnek (özellikle "kısmi ekleme + kısmi netleştirme" ve "çoklu
     harcama" senaryoları için input → beklenen fonksiyon çağrıları)
     eklenmesi, modelin kuralları — özellikle ZORUNLU NETLİK KURALI'nı — daha
@@ -593,7 +609,7 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
     davrandığı örnekler biriktirilip buraya eklenebilir.
 11. **Sabit kategori kümesi + kategori ayrım (disambiguation) prompt'u**
     — kullanıcının açık isteği (2026-08-30). **UYGULANDI (2026-08-31):**
-    `Config.js` (`KATEGORILER` sabiti + `TOOLS.kategori.enum`), `Main.js`
+    `Config.js` (`KATEGORILER` sabiti + `TOOLS.kategori.enum`), `Gemini.js`
     (`buildKategoriTanimlariBlok_` + systemInstruction'a KATEGORİLER/
     KARIŞABİLEN KATEGORİLER/ÖRNEKLER blokları) ve `Expenses.js`
     (`harcamaEkle`'de üçüncü katman kod-seviyesi doğrulama) güncellendi.
@@ -723,7 +739,7 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
     sonrasında anlık tüketmek için alınan atıştırmalık/içecek → Yemek;
     markette toplu/stoklamak amacıyla alınan gıda → Ev (değişmedi). Bu kural
     `Config.js > KATEGORILER` (Ev'in yeni `kapsamaz`'ı, Yemek'in genişletilen
-    `kapsar`/`kapsamaz`'ı) ve `Main.js > SYSTEM_INSTRUCTION_TEMPLATE`'e
+    `kapsar`/`kapsamaz`'ı) ve `Gemini.js > SYSTEM_INSTRUCTION_TEMPLATE`'e
     (KARIŞABİLEN KATEGORİLER'e yeni madde + iki yeni ÖRNEK satırı) işlendi.
 12. **Taksitli harcama ayrıştırma** — kullanıcının açık isteği
     (2026-08-31). **UYGULANDI:** `Config.js > TOOLS`'a `taksitliHarcamaEkle`
@@ -782,7 +798,7 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
       mesajları listele" diye bir API vermiyor; `sendTelegramMessage_`
       şu an gönderdiği mesajın `message_id`'sini hiç saklamıyor. Bu yüzden
       bu özellik ancak **ileriye dönük** çalışabilir: `sendTelegramMessage_`
-      (Main.js) Telegram'ın `sendMessage` yanıtından dönen `message_id`'yi
+      (Telegram.js) Telegram'ın `sendMessage` yanıtından dönen `message_id`'yi
       - gönderim zamanını + mesaj tipini (örn. "netlestirme" vs "harcama
         onayı") bir yere (Script Properties ya da gizli bir Sheets sekmesi)
         kaydetmeli; ardından bir `/temizle` komutu veya zamanlı bir tetikleyici
@@ -824,10 +840,19 @@ fonksiyon adları, çünkü onlar kararlı.
   desteklenecek?
 - `gemini-3.5-flash` gerçekten kullanılabilir bir model adı mı, yoksa çalışan
   güncel bir model adıyla mı değiştirilmeli?
-- `Retry.js` (Katman 2 tekrar deneme) henüz `clasp push` ile deploy edilmedi
-  ve gerçek Telegram trafiğiyle uçtan uca doğrulanmadı (yalnızca Node mock
-  harness'ıyla, bkz. yukarıdaki "Gemini API geçici/kalıcı hatalarına karşı
-  Katman 2" bölümü) — deploy sonrası gerçek bir 503/429 senaryosuyla ya da
-  geçici `CONFIG.geminiModel` bozarak (404) doğrulanmalı; ayrıca
-  `yenidenDenemeKuyruguDurumu()` çıktısı ilk gerçek kullanımdan sonra
-  kontrol edilmeli.
+- `retry/RetryCore.js` + `retry/RetryCommands.js` (Katman 2 tekrar deneme)
+  henüz `clasp push` ile deploy edilmedi ve gerçek Telegram trafiğiyle uçtan
+  uca doğrulanmadı (yalnızca Node mock harness'ıyla, bkz. yukarıdaki "Gemini
+  API geçici/kalıcı hatalarına karşı Katman 2" bölümü) — deploy sonrası
+  gerçek bir 503/429 senaryosuyla ya da geçici `CONFIG.geminiModel` bozarak
+  (404) doğrulanmalı; ayrıca `yenidenDenemeKuyruguDurumu()` çıktısı ilk
+  gerçek kullanımdan sonra kontrol edilmeli.
+- **Script'lerin modülerleştirilmesi (2026-09-26)** henüz `clasp push` ile
+  deploy edilmedi: `Main.js`/`Retry.js` içeriği `Logging.js`/`Gemini.js`/
+  `Telegram.js`/`Main.js`/`retry/RetryCore.js`/`retry/RetryCommands.js`'e
+  bölündü (davranış DEĞİŞMEDİ, sadece dosya sınırları). `.clasp.json`'daki
+  `rootDir: ""` + `skipSubdirectories: false` alt dizin push'unu desteklediği
+  için config değişikliği gerekmiyor, ama `clasp push` sonrası Apps Script
+  editöründe `retry/RetryCore` ve `retry/RetryCommands` dosyalarının
+  göründüğü ve eski `Retry.js`'in silindiği elle doğrulanmalı; sonra bir
+  `/komutlar` ve bir harcama mesajıyla uçtan uca smoke-test yapılmalı.
