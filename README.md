@@ -96,16 +96,22 @@ Başarısız). Cevapsız kalan bir mesajda durum sütunu tek başına çok şey 
 
 ## Dosya yapısı
 
-Kod, sorumluluklarına göre 5 dosyaya ayrılmıştır (Apps Script'te tüm proje
-dosyaları aynı global scope'u paylaşır, dosya sırası önemli değildir):
+Kod, sorumluluklarına göre 9 dosyaya ayrılmıştır (Apps Script'te tüm proje
+dosyaları aynı global scope'u paylaşır, dosya sırası önemli değildir; `retry/`
+bir alt dizin olsa da bunu değiştirmez — clasp `rootDir: ""` +
+`skipSubdirectories: false` ile alt dizinleri de push eder):
 
-| Dosya         | İçerik                                                                                                                 |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `Config.js`   | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini function declarations)                                          |
-| `Expenses.js` | Sheets D:I yazma/okuma/sıralama yardımcıları + `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla`           |
-| `Main.js`     | `FUNCTION_MAP`, Gemini REST entegrasyonu (+ Katman 1 tekrar deneme), Telegram entegrasyonu, `update_id` dedup (`isYeniUpdate_`), `doPost` giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil` |
-| `Queue.js`    | Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (`kuyrugaEkle_`, `telegram_queue` sekmesi)                        |
-| `Retry.js`    | Gemini geçici/kalıcı hatalarında Katman 2 — mesaj bazlı, tek seferlik trigger'larla saatlik tekrar deneme (`yeniden_deneme_kuyrugu` sekmesi), teşhis: `yenidenDenemeKuyruguDurumu()` |
+| Dosya                     | İçerik                                                                                                                 |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `Config.js`               | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini function declarations)                                          |
+| `Expenses.js`             | Sheets D:I yazma/okuma/sıralama yardımcıları + `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla`           |
+| `Logging.js`              | Ortak loglama (`log_`, `logHata_`)                                                                                     |
+| `Gemini.js`                | `FUNCTION_MAP`, Gemini REST entegrasyonu (v1beta `generateContent`, function calling), Katman 1 (senkron) tekrar deneme, `mesajiIsleVeYanitla_` |
+| `Telegram.js`             | Telegram gönderim (`sendTelegramMessage_`), `/` komut işleme (`islemKomut_`), Gemini sonuçlarını cevaba birleştirme (`islemSonuclariniBirlestir_`) |
+| `Main.js`                 | `update_id` dedup (`isYeniUpdate_`), `doPost` webhook giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil`     |
+| `Queue.js`                | Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (`kuyrugaEkle_`, `telegram_queue` sekmesi)                        |
+| `retry/RetryCore.js`      | Gemini geçici/kalıcı hatalarında Katman 2 — otomatik motor: mesaj bazlı, tek seferlik trigger'larla saatlik tekrar deneme (`telegram_queue` sekmesinin E:K kolonları) |
+| `retry/RetryCommands.js`  | Katman 2'nin manuel komut yüzeyi (`/pesedilenler`, `/pesdene`), teşhis: `yenidenDenemeKuyruguDurumu()`                 |
 
 ## Sheets sütun sözleşmesi
 
