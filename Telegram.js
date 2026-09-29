@@ -11,7 +11,7 @@
  *   - Logging.js: log_ / logHata_
  *   - Gemini.js: calistirFonksiyon_ (islemSonuclariniBirlestir_ tarafından çağrılır)
  *   - Expenses.js: sonHarcamalariGetir / sonHarcamalariTopla / normalizeAdet_ (islemKomut_ tarafından çağrılır)
- *   - retry/RetryCommands.js: pesEdilenleriListele_ / pesEdilenleriTekrarDene_ (islemKomut_ tarafından çağrılır)
+ *   - retry/RetryCommands.js: pesEdilenleriListele_ / pesEdilenleriTekrarDene_ / sonMesajiSil_ (islemKomut_ tarafından çağrılır)
  *   - Main.js: doPost (bu dosyadaki sendTelegramMessage_/islemKomut_/islemSonuclariniBirlestir_'i kullanır)
  */
 
@@ -19,17 +19,30 @@
  * Telegram Bot API sendMessage çağrısı.
  * @param {number|string} chatId
  * @param {string} text
+ * @param {string} [parseMode] Verilirse (örn. "Markdown") Telegram'a
+ *   `parse_mode` olarak iletilir. Gönderim BAŞARISIZ olursa (dengesiz
+ *   `*`/`_`/backtick içeren bir metin "can't parse entities" ile 400
+ *   döndürebilir) aynı metin parseMode OLMADAN bir kez daha denenir —
+ *   biçimlendirme asla mesajın kullanıcıya hiç ulaşmamasına yol açmamalı.
  */
-function sendTelegramMessage_(chatId, text) {
+function sendTelegramMessage_(chatId, text, parseMode) {
   // NOT: `url` bot token içeriyor — asla loglanmaz.
   var url =
     "https://api.telegram.org/bot" + CONFIG.telegramToken + "/sendMessage";
-  log_("telegram.gonder", { chatId: chatId, uzunluk: (text || "").length });
+  var payload = { chat_id: chatId, text: text };
+  if (parseMode) {
+    payload.parse_mode = parseMode;
+  }
+  log_("telegram.gonder", {
+    chatId: chatId,
+    uzunluk: (text || "").length,
+    parseMode: parseMode || null,
+  });
 
   var response = UrlFetchApp.fetch(url, {
     method: "post",
     contentType: "application/json",
-    payload: JSON.stringify({ chat_id: chatId, text: text }),
+    payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
 
@@ -44,7 +57,61 @@ function sendTelegramMessage_(chatId, text) {
         "): " +
         govde,
     );
+    if (parseMode) {
+      log_("telegram.parse-modu-basarisiz-duz-metinle-tekrar", {
+        chatId: chatId,
+      });
+      sendTelegramMessage_(chatId, text, undefined);
+    }
   }
+}
+
+/**
+ * Bir metni Telegram "code span" (backtick) biçiminde alıntılar — kullanıcının
+ * kendi orijinal mesajını botun ürettiği metinden görsel olarak ayırmak için
+ * (kullanıcı isteği, 2026-09-29). İçindeki literal backtick karakterleri
+ * code-span'ı erken kapatmasın diye tek tırnakla değiştirilir. `parseMode:
+ * "Markdown"` ile gönderilen mesajlarda kullanılmalı.
+ * @param {string} metin
+ * @return {string}
+ */
+function telegramAlinti_(metin) {
+  var guvenli = String(metin === undefined || metin === null ? "" : metin).replace(
+    /`/g,
+    "'",
+  );
+  return "`" + guvenli + "`";
+}
+
+/**
+ * Telegram `deleteMessage` çağrısı — `/sonmesajisil` komutu tarafından
+ * kullanılır (bkz. retry/RetryCommands.js > sonMesajiSil_). Telegram özel
+ * sohbette botun KENDİSİNE gelen (incoming) mesajları silmesine izin verir,
+ * ama SADECE gönderildikten sonraki 48 saat içinde — bu pencere dışında
+ * (ya da mesaj zaten silinmişse) Telegram hata döner, bu fonksiyon exception
+ * FIRLATMAZ, sadece loglayıp `false` döner.
+ * @param {number|string} chatId
+ * @param {number} messageId
+ * @return {boolean} Silme başarılıysa true.
+ */
+function telegramMesajiSil_(chatId, messageId) {
+  var url =
+    "https://api.telegram.org/bot" + CONFIG.telegramToken + "/deleteMessage";
+  var response = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({ chat_id: chatId, message_id: messageId }),
+    muteHttpExceptions: true,
+  });
+  var basarili = response.getResponseCode() === 200;
+  if (!basarili) {
+    log_("telegram.mesaj-silinemedi", {
+      chatId: chatId,
+      messageId: messageId,
+      govde: response.getContentText(),
+    });
+  }
+  return basarili;
 }
 
 /** `/komutlar` çıktısı ve tanınmayan komutlarda gösterilecek ortak liste. */
@@ -54,6 +121,7 @@ const KOMUT_LISTESI_METNI = [
   "/toplam [N] — son N harcamanın toplamını hesaplar (belirtilmezse 5).",
   "/pesedilenler — otomatik tekrar denemesi tükenmiş (pes edilmiş) mesajları listeler.",
   "/pesdene — pes edilmiş TÜM mesajları şimdi topluca tekrar dener.",
+  "/sonmesajisil — bir önceki mesajınızı Telegram'dan silmeyi dener ve varsa otomatik tekrar deneme kaydını iptal eder.",
   "/komutlar — bu listeyi gösterir.",
 ].join("\n");
 
@@ -67,9 +135,13 @@ const KOMUT_LISTESI_METNI = [
  * prensibinin dışındadır — pes edilmiş mesajları topluca yeniden Gemini'ye
  * göndererek tekrar dener (kullanıcının açık isteğiyle, manuel bir işlemdir).
  * @param {string} text Kullanıcının `/` ile başlayan tam mesajı.
+ * @param {number|string} chatId `/sonmesajisil` için gerekli.
+ * @param {number} updateId Bu komut mesajının kendi update_id'si —
+ *   `/sonmesajisil`'in "son mesaj" aramasında komutun KENDİ satırını hariç
+ *   tutması için gerekli (bkz. sonMesajiSil_).
  * @return {string} Telegram'a gönderilecek yanıt.
  */
-function islemKomut_(text) {
+function islemKomut_(text, chatId, updateId) {
   var parcalar = text.trim().split(/\s+/);
   var komut = parcalar[0].toLowerCase();
   var argument = parcalar[1];
@@ -87,6 +159,9 @@ function islemKomut_(text) {
   }
   if (komut === "/pesdene") {
     return pesEdilenleriTekrarDene_();
+  }
+  if (komut === "/sonmesajisil") {
+    return sonMesajiSil_(chatId, updateId);
   }
   if (komut === "/komutlar") {
     return KOMUT_LISTESI_METNI;

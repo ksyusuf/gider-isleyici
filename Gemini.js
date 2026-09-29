@@ -312,7 +312,10 @@ function callGemini_(userText, mesajZamaniSaniye) {
       promptFeedback: json.promptFeedback,
       candidates: json.candidates,
     });
-    throw new Error("Gemini API beklenmeyen bir yanıt döndürdü: " + govde);
+    // NOT: ham `govde` kasıtlı olarak mesaja eklenmiyor (kullaniciyaGosterilecekHataMetni_
+    // httpStatus'u olmayan hataları olduğu gibi gösterir) — detay zaten yukarıdaki
+    // log_ çağrısıyla loglandı.
+    throw new Error("Gemini API beklenmeyen bir yanıt döndürdü.");
   }
 
   log_("gemini.finishReason", candidate.finishReason);
@@ -353,20 +356,31 @@ function hataGeciciMi_(err) {
 }
 
 /**
- * Gemini'nin "model şu an yüksek talepte" (aşırı yüklenme) yanıtını tespit
- * eder — gövdede `error.status === "UNAVAILABLE"` olarak gelir, örnek:
- * `{"error":{"code":503,"message":"This model is currently experiencing
- * high demand...","status":"UNAVAILABLE"}}`. Bu KNOWN bir sebep: modelin o an
- * meşgul olduğunu zaten biliyoruz, birkaç saniye arayla 3 kez tekrar denemek
- * durumu değiştirmez (sorun saatler sürebiliyor, bkz. CLAUDE.md test notları)
- * — bu yüzden Katman 1'in hızlı denemelerini boşuna harcamak yerine doğrudan
- * Katman 2'ye (saatlik trigger) geçilir. Gövde parse edilemezse (beklenmeyen
- * format) güvenli tarafta kalınıp false döner — normal Katman 1 akışı işler.
+ * Katman 1'in hızlı (saniyeler içinde) tekrar denemesinin ANLAMSIZ olduğu,
+ * sebebi zaten KESİN bilinen iki durumu tespit eder — ikisinde de doğrudan
+ * Katman 2'ye (saatlik trigger) geçilir, kalan hızlı deneme hakları harcanmaz:
+ *   (a) "Yüksek talep" — gövdede `error.status === "UNAVAILABLE"`, örnek:
+ *       `{"error":{"code":503,"message":"This model is currently experiencing
+ *       high demand...","status":"UNAVAILABLE"}}`. Model o an meşgul, birkaç
+ *       saniye arayla tekrar denemek durumu değiştirmez (sorun saatler
+ *       sürebiliyor, bkz. CLAUDE.md test notları).
+ *   (b) "Kota/rate-limit doldu" — `httpStatus === 429`. Kota zaten dolu
+ *       durumdayken hemen tekrar istek atmak sorunu ÇÖZMEK yerine kotayı daha
+ *       da zorlar (2026-09-29, prod'da gözlemlendi) — bu yüzden gövdeye hiç
+ *       bakılmadan doğrudan true döner.
+ * Gövde parse edilemezse (beklenmeyen format) güvenli tarafta kalınıp false
+ * döner — normal Katman 1 akışı işler.
  * @param {Error} err
  * @return {boolean}
  */
 function hataYuksekTalepMi_(err) {
-  if (!err || typeof err.httpBody !== "string") {
+  if (!err) {
+    return false;
+  }
+  if (err.httpStatus === 429) {
+    return true;
+  }
+  if (typeof err.httpBody !== "string") {
     return false;
   }
   try {
@@ -375,6 +389,44 @@ function hataYuksekTalepMi_(err) {
   } catch (parseErr) {
     return false;
   }
+}
+
+/**
+ * Kullanıcıya (ve Sheets'teki `son_hata_mesaji` sütununa — bu da
+ * `/pesedilenler` üzerinden Telegram'a dökülüyor) gösterilecek, HAM JSON
+ * gövdesi İÇERMEYEN kısa bir Türkçe açıklama üretir. Ham `err.message`
+ * (Gemini'nin `{"error":{...}}` gövdesini birebir içerir) doğrudan
+ * kullanıcıya gösterilmez — teşhis için ham hata `logHata_` ile loglanmaya
+ * devam eder, SADECE kullanıcı yüzeyine giden metin buradan geçirilir.
+ * @param {Error} err
+ * @return {string}
+ */
+function kullaniciyaGosterilecekHataMetni_(err) {
+  if (!err) {
+    return "Beklenmeyen bir hata oluştu.";
+  }
+  if (hataYuksekTalepMi_(err)) {
+    return err.httpStatus === 429
+      ? "Gemini API kullanım kotası doldu (çok fazla istek gönderildi)."
+      : "Gemini şu an yoğun (yüksek talep).";
+  }
+  if (typeof err.httpStatus === "number") {
+    // Bu noktaya gelen err HER ZAMAN callGemini_'nin HTTP-durumu dalından
+    // gelir ve `.message` ham Gemini JSON gövdesini içerir — asla olduğu
+    // gibi gösterilmez.
+    if (GEMINI_KALICI_HTTP_KODLARI.indexOf(err.httpStatus) !== -1) {
+      return (
+        "Gemini isteği reddetti (HTTP " +
+        err.httpStatus +
+        ") — bu genellikle API key ya da istek biçimiyle ilgili kalıcı bir sorundur."
+      );
+    }
+    return "Gemini API hatası (HTTP " + err.httpStatus + ").";
+  }
+  // httpStatus yok: ya callGemini_'nin "beklenmeyen yanıt" dalı (artık ham
+  // gövde içermiyor) ya da kodun kendi ürettiği, zaten okunur bir Türkçe
+  // hata mesajı (örn. kuyruklama/trigger hatası) — olduğu gibi gösterilir.
+  return err.message || "Beklenmeyen bir hata oluştu.";
 }
 
 /**

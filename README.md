@@ -110,7 +110,7 @@ bir alt dizin olsa da bunu değiştirmez — clasp `rootDir: ""` +
 | `Telegram.js`             | Telegram gönderim (`sendTelegramMessage_`), `/` komut işleme (`islemKomut_`), Gemini sonuçlarını cevaba birleştirme (`islemSonuclariniBirlestir_`) |
 | `Main.js`                 | `update_id` dedup (`isYeniUpdate_`), `doPost` webhook giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil`     |
 | `Queue.js`                | Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (`kuyrugaEkle_`, `telegram_queue` sekmesi)                        |
-| `retry/RetryCore.js`      | Gemini geçici/kalıcı hatalarında Katman 2 — otomatik motor: mesaj bazlı, tek seferlik trigger'larla saatlik tekrar deneme (`telegram_queue` sekmesinin E:K kolonları) |
+| `retry/RetryCore.js`      | Gemini geçici/kalıcı hatalarında Katman 2 — otomatik motor: mesaj bazlı, tek seferlik trigger'larla dakika/saat ölçekli tekrar deneme (`telegram_queue` sekmesinin E:L kolonları) |
 | `retry/RetryCommands.js`  | Katman 2'nin manuel komut yüzeyi (`/pesedilenler`, `/pesdene`), teşhis: `yenidenDenemeKuyruguDurumu()`                 |
 
 ## Sheets sütun sözleşmesi

@@ -6,20 +6,26 @@
  * Gemini.js > callGeminiIleTekrarDeneme_ (Katman 1) bir mesaj için art arda
  * GEMINI_MAX_DENEME kez denendiği halde GEÇİCİ bir hatayla (503, ağ hatası,
  * boş yanıt vb.) başarısız kalırsa, bu dosya o mesaja özel, TEK SEFERLİK bir
- * Apps Script trigger kurar (ilk kez 1 saat sonrasına). Trigger ateşlendiğinde
- * yine Katman 1 (3 hızlı deneme) çalışır; yine geçici bir hatayla başarısız
- * olursa BİR SONRAKİ AŞAMA için yeni bir tek seferlik trigger kurulur. Aşama
- * gecikmeleri RETRY_BACKOFF_SAAT: 1-1-2-2-4 saat (toplam ~10 saat, 5 aşama).
- * Son (5.) aşama da başarısız olursa sistem PES EDER — 6. bir trigger
+ * Apps Script trigger kurar (ilk kez 10 dakika sonrasına). Trigger
+ * ateşlendiğinde yine Katman 1 (3 hızlı deneme) çalışır; yine geçici bir
+ * hatayla başarısız olursa BİR SONRAKİ AŞAMA için yeni bir tek seferlik
+ * trigger kurulur. Aşama gecikmeleri RETRY_BACKOFF_DAKIKA: 10-20-40 dakika,
+ * sonra 1-1-2-2-4 saat (toplam 8 aşama, ~11 saat 10 dakika — kısa/hızlı
+ * geçici blipler için ilk üç aşama dakika mertebesinde, sürdürülebilir
+ * sorunlar için son aşamalar saat mertebesinde, 2026-09-29 kullanıcı kararı).
+ * Son (8.) aşama da başarısız olursa sistem PES EDER — 9. bir trigger
  * KURULMAZ, satır `PES_EDILDI` durumuna işaretlenir (ASLA silinmez) ve
  * kullanıcıya hem bu mesaj için hem de kuyrukta biriken diğer pes-edilmiş
  * mesajlar için toplu bir bildirim gönderilir. Kalıcı bir HTTP hatası
  * (400/401/403/404 — Gemini.js > GEMINI_KALICI_HTTP_KODLARI) alınırsa hiç
  * retry denenmeden aynı PES_EDILDI yoluna girilir (bkz.
  * pesEdildiKuyruguEkleVeBildir_). Gemini'nin "model şu an yüksek talepte"
- * (`error.status: "UNAVAILABLE"`) yanıtı özel olarak tanınır (Gemini.js >
- * hataYuksekTalepMi_): sebep zaten bilindiği için Katman 1'in hızlı denemeleri
- * boşuna harcanmaz, doğrudan Katman 2'ye (bu dosya) geçilir.
+ * (`error.status: "UNAVAILABLE"`) YA DA kota/rate-limit dolu (`httpStatus
+ * === 429`) yanıtları özel olarak tanınır (Gemini.js > hataYuksekTalepMi_):
+ * sebep zaten bilindiği için Katman 1'in hızlı denemeleri boşuna harcanmaz,
+ * doğrudan Katman 2'ye (bu dosya) geçilir — 429'da özellikle önemli, çünkü
+ * zaten dolu bir kotanın üstüne hemen tekrar istek atmak durumu kötüleştirir
+ * (2026-09-29, prod'da gözlemlendi).
  *
  * `/pesedilenler` ve `/pesdene` komutlarının manuel/deterministik backend'i
  * (bu motorun otomatik akışının parçası DEĞİL) `retry/RetryCommands.js`'te
@@ -89,14 +95,18 @@ const RETRY_DURUM = {
   ISLENIYOR: "ISLENIYOR", // şu an bir trigger tarafından işleniyor (çok kısa ömürlü ara durum)
   PES_EDILDI: "PES_EDILDI", // tüm aşamalar (ya da kalıcı hata) tükendi, retry durduruldu — ASLA SİLİNMEZ/TEMİZLENMEZ
   TAMAMLANDI: "TAMAMLANDI", // gecikmeli de olsa başarıyla işlendi — SADECE bu durumun E:K kolonları FIFO ile temizlenebilir
+  SILINDI: "SILINDI", // kullanıcı /sonmesajisil ile elle iptal etti (2026-09-29) — TAMAMLANDI gibi FIFO ile temizlenebilir
 };
 
 /**
- * Aşama gecikmeleri (saat). Aşama 1 → 1sa, 2 → 1sa, 3 → 2sa, 4 → 2sa, 5 → 4sa.
- * 5. aşamanın (4 saatlik beklemenin) sonundaki deneme de başarısız olursa
- * PES EDİLİR — 6. bir eleman/aşama YOK (bkz. sonAsamaMi_).
+ * Aşama gecikmeleri (dakika). Aşama 1→10dk, 2→20dk, 3→40dk, 4→1sa, 5→1sa,
+ * 6→2sa, 7→2sa, 8→4sa (2026-09-29: ilk üç aşama kısa/hızlı geçici blipleri
+ * hızlıca çözmek için eklendi, kullanıcı kararı — "1-1-2-2-4" dizisinin
+ * BAŞINA 10-20-40 dakika eklendi). 8. aşamanın (4 saatlik beklemenin)
+ * sonundaki deneme de başarısız olursa PES EDİLİR — 9. bir eleman/aşama YOK
+ * (bkz. sonAsamaMi_).
  */
-const RETRY_BACKOFF_SAAT = [1, 1, 2, 2, 4];
+const RETRY_BACKOFF_DAKIKA = [10, 20, 40, 60, 60, 120, 120, 240];
 
 /** Trigger'ların çağıracağı, Apps Script'e kayıtlı giriş noktası fonksiyon adı. */
 const RETRY_HANDLER_FN_ADI = "zamanlanmisTekrarDenemeyiIsle";
@@ -135,6 +145,7 @@ function kuyrukSatirNesnesiOlustur_(satirNo, row) {
     sonDenemeZamani: row[8],
     sonHataMesaji: row[9],
     triggerId: row[10],
+    messageId: row[11],
   };
 }
 
@@ -208,6 +219,7 @@ function satiriGuncelle_(sheet, row, alanlar) {
         guncel.sonDenemeZamani,
         guncel.sonHataMesaji,
         guncel.triggerId,
+        guncel.messageId,
       ],
     ]);
 }
@@ -343,23 +355,41 @@ function eskiKayitlariTemizleKilitli_(sheet) {
 // ============================================================================
 
 /**
- * `asamaNo`ya (1-indeksli) karşılık gelen bekleme süresini (saat) döndürür.
+ * `asamaNo`ya (1-indeksli) karşılık gelen bekleme süresini (dakika) döndürür.
  * @param {number} asamaNo
  * @return {number}
  */
-function sonrakiGecikmeSaat_(asamaNo) {
-  var index = Math.min(asamaNo, RETRY_BACKOFF_SAAT.length) - 1;
-  return RETRY_BACKOFF_SAAT[index];
+function sonrakiGecikmeDakika_(asamaNo) {
+  var index = Math.min(asamaNo, RETRY_BACKOFF_DAKIKA.length) - 1;
+  return RETRY_BACKOFF_DAKIKA[index];
 }
 
 /**
- * `asamaNo` son aşama (RETRY_BACKOFF_SAAT'in son elemanı, 4 saat) mı? True ise
- * bu aşamanın başarısızlığı bir sonraki trigger'ı DEĞİL, PES ETMEyi tetikler.
+ * `asamaNo` son aşama (RETRY_BACKOFF_DAKIKA'nın son elemanı, 240dk/4sa) mı?
+ * True ise bu aşamanın başarısızlığı bir sonraki trigger'ı DEĞİL, PES
+ * ETMEyi tetikler.
  * @param {number} asamaNo
  * @return {boolean}
  */
 function sonAsamaMi_(asamaNo) {
-  return asamaNo >= RETRY_BACKOFF_SAAT.length;
+  return asamaNo >= RETRY_BACKOFF_DAKIKA.length;
+}
+
+/**
+ * Bir süreyi (ms) okunabilir Türkçe metne çevirir — 60 dakikadan azsa
+ * dakika, değilse saat cinsinden (2026-09-29: RETRY_BACKOFF_DAKIKA artık
+ * dakika mertebesinde aşamalar da içerdiği için, her yerde "saat"e
+ * yuvarlamak yanıltıcı olurdu, örn. 10 dakika sonra çözülen bir mesaj
+ * yanlışlıkla "1 saat önce" gösterilmemeli).
+ * @param {number} ms
+ * @return {string} Örn. "10 dakika" ya da "2 saat".
+ */
+function gecenSureyiIfadeEt_(ms) {
+  var dakika = Math.max(1, Math.round(ms / 60000));
+  if (dakika < 60) {
+    return dakika + " dakika";
+  }
+  return Math.round(dakika / 60) + " saat";
 }
 
 // ============================================================================
@@ -367,18 +397,18 @@ function sonAsamaMi_(asamaNo) {
 // ============================================================================
 
 /**
- * `gecikmeSaat` saat sonrasına tek seferlik bir Apps Script trigger kurar.
+ * `gecikmeDakika` dakika sonrasına tek seferlik bir Apps Script trigger kurar.
  * ⚠️ Tek seferlik (`after`) trigger'lar ateşlendikten sonra KENDİLİĞİNDEN
  * SİLİNMEZ — kurulumdan sonraki her aşama geçişinde eskisi mutlaka
  * zamanliTetikleyiciSil_ ile temizlenmeli, aksi halde proje trigger kotası
  * (~20) sessizce tükenir.
- * @param {number} gecikmeSaat
+ * @param {number} gecikmeDakika
  * @return {string} Yeni trigger'ın uniqueId'si.
  */
-function zamanliTetikleyiciKur_(gecikmeSaat) {
+function zamanliTetikleyiciKur_(gecikmeDakika) {
   var trigger = ScriptApp.newTrigger(RETRY_HANDLER_FN_ADI)
     .timeBased()
-    .after(gecikmeSaat * 60 * 60 * 1000)
+    .after(gecikmeDakika * 60 * 1000)
     .create();
   return trigger.getUniqueId();
 }
@@ -412,7 +442,7 @@ function zamanliTetikleyiciSil_(triggerId) {
  * için AZ ÖNCE (aynı doPost execution'ında, Gemini çağrısından ÖNCE) eklediği
  * satırı bulup E:K kolonlarını doldurur — YENİ bir satır EKLEMEZ. O satır
  * (savunma amaçlı, normalde olmaması gereken bir durumda) bulunamazsa mesajı
- * kaybetmemek için tam bir satır olarak eklenir. 1 saat sonrasına ilk
+ * kaybetmemek için tam bir satır olarak eklenir. 10 dakika sonrasına ilk
  * trigger'ı kurar.
  *
  * Trigger kurulumu (ScriptApp.newTrigger) BİLEREK kilit/sheet işlemlerinden
@@ -428,7 +458,11 @@ function zamanliTetikleyiciSil_(triggerId) {
  * @param {number|string} chatId
  * @param {string} text
  * @param {number} mesajTarihiSaniye Telegram update.message.date (Unix saniye).
- * @param {string} hataMesaji
+ * @param {string} hataMesaji Kullanıcıya gösterilecek, temizlenmiş metin
+ *   (bkz. Gemini.js > kullaniciyaGosterilecekHataMetni_) — çağıran taraf
+ *   (Main.js > doPost) ham hatayı buraya ASLA geçirmemeli.
+ * @param {number} [messageId] Telegram update.message.message_id — savunma
+ *   amaçlı fallback satırının L kolonuna yazılması için.
  */
 function yenidenDenemeKuyruguEkle_(
   updateId,
@@ -436,12 +470,13 @@ function yenidenDenemeKuyruguEkle_(
   text,
   mesajTarihiSaniye,
   hataMesaji,
+  messageId,
 ) {
   var ilkAsama = 1;
-  var gecikmeSaat = sonrakiGecikmeSaat_(ilkAsama);
+  var gecikmeDakika = sonrakiGecikmeDakika_(ilkAsama);
   var triggerId;
   try {
-    triggerId = zamanliTetikleyiciKur_(gecikmeSaat);
+    triggerId = zamanliTetikleyiciKur_(gecikmeDakika);
   } catch (triggerErr) {
     logHata_("yenidenDeneme.trigger-kurulamadi-ILK-DENEME", triggerErr);
     pesEdildiKuyruguEkleVeBildir_(
@@ -450,6 +485,7 @@ function yenidenDenemeKuyruguEkle_(
       text,
       mesajTarihiSaniye,
       "Trigger kurulamadı: " + triggerErr.message,
+      messageId,
     );
     return;
   }
@@ -461,7 +497,7 @@ function yenidenDenemeKuyruguEkle_(
     var simdi = new Date();
     eskiKayitlariTemizle_(sheet, simdi);
 
-    var sonrakiDenemeZamani = new Date(simdi.getTime() + gecikmeSaat * 60 * 60 * 1000);
+    var sonrakiDenemeZamani = new Date(simdi.getTime() + gecikmeDakika * 60 * 1000);
 
     var alanlar = {
       durum: RETRY_DURUM.BEKLIYOR,
@@ -493,6 +529,7 @@ function yenidenDenemeKuyruguEkle_(
         alanlar.sonDenemeZamani,
         alanlar.sonHataMesaji,
         alanlar.triggerId,
+        messageId,
       ]);
     }
     log_("yenidenDeneme.kuyruklandi", {
@@ -514,7 +551,10 @@ function yenidenDenemeKuyruguEkle_(
  * @param {number|string} chatId
  * @param {string} text
  * @param {number} mesajTarihiSaniye
- * @param {string} hataMesaji
+ * @param {string} hataMesaji Kullanıcıya gösterilecek, temizlenmiş metin
+ *   (bkz. Gemini.js > kullaniciyaGosterilecekHataMetni_).
+ * @param {number} [messageId] Telegram update.message.message_id — savunma
+ *   amaçlı fallback satırının L kolonuna yazılması için.
  */
 function pesEdildiKuyruguEkleVeBildir_(
   updateId,
@@ -522,6 +562,7 @@ function pesEdildiKuyruguEkleVeBildir_(
   text,
   mesajTarihiSaniye,
   hataMesaji,
+  messageId,
 ) {
   var lock = LockService.getScriptLock();
   lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
@@ -562,6 +603,7 @@ function pesEdildiKuyruguEkleVeBildir_(
         alanlar.sonDenemeZamani,
         alanlar.sonHataMesaji,
         alanlar.triggerId,
+        messageId,
       ]);
       satirNo = sheet.getLastRow();
     }
@@ -591,7 +633,8 @@ function pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, buSatirNo) {
     "❌ Bu mesaj işlenemedi, otomatik tekrar deneme durduruldu: " +
       hataMesaji +
       "\n\nOrijinal mesajınız: " +
-      text,
+      telegramAlinti_(text),
+    "Markdown",
   );
 
   var digerPesEdilenler = kuyrukTumSatirlariOku_(sheet).filter(function (row) {
@@ -601,7 +644,7 @@ function pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, buSatirNo) {
   if (digerPesEdilenler.length > 0) {
     var liste = digerPesEdilenler
       .map(function (row, i) {
-        return i + 1 + ". " + row.text;
+        return i + 1 + ". " + telegramAlinti_(row.text);
       })
       .join("\n");
     sendTelegramMessage_(
@@ -610,6 +653,7 @@ function pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, buSatirNo) {
         digerPesEdilenler.length +
         " eski mesaj var:\n" +
         liste,
+      "Markdown",
     );
   }
 }
@@ -625,7 +669,8 @@ function pesEdildiBildirimGonder_(sheet, chatId, text, hataMesaji, buSatirNo) {
  *   - Başarılı → "gecikmeli işlendi" notuyla Telegram'a gönderilir, satır
  *     SİLİNMEZ, durum=TAMAMLANDI'ya geçer.
  *   - Geçici hata + son aşama DEĞİLSE → bir sonraki aşama için yeni trigger kurulur.
- *   - Geçici hata + SON aşama (4sa) ise → PES EDİLİR, 6. trigger KURULMAZ.
+ *   - Geçici hata + SON aşama (RETRY_BACKOFF_DAKIKA'nın sonu, 240dk/4sa) ise
+ *     → PES EDİLİR, 9. trigger KURULMAZ.
  *   - Kalıcı hata (nadiren, savunma amaçlı) → doğrudan PES EDİLİR.
  *   - Yeni trigger kurulamazsa (örn. kota doldu) → sessizce kaybetmek yerine PES EDİLİR.
  */
@@ -682,15 +727,14 @@ function zamanlanmisTekrarDenemeyiIsle() {
     try {
       var mesajZamaniSaniye = Math.floor(row.mesajTarihi.getTime() / 1000);
       var cevapMetni = mesajiIsleVeYanitla_(row.text, mesajZamaniSaniye);
-      var saatOnce = Math.max(
-        1,
-        Math.round((simdi.getTime() - row.mesajTarihi.getTime()) / 3600000),
+      var neKadarOnce = gecenSureyiIfadeEt_(
+        simdi.getTime() - row.mesajTarihi.getTime(),
       );
       sendTelegramMessage_(
         row.chatId,
         "⏳ Gecikmeli işlendi (" +
-          saatOnce +
-          " saat önce gönderilmişti):\n\n" +
+          neKadarOnce +
+          " önce gönderilmişti):\n\n" +
           cevapMetni,
       );
       // Satır burada SİLİNMEZ — TAMAMLANDI olarak işaretlenir, ancak FIFO
@@ -710,25 +754,26 @@ function zamanlanmisTekrarDenemeyiIsle() {
     } catch (err) {
       // Sınıflandırılmamış/beklenmeyen bir hata da (hataGeciciMi_ default: geçici)
       // "reschedule ya da açıkça pes et" yoluna düşer — asla sessizce silinmez.
+      var temizHataMetni = kullaniciyaGosterilecekHataMetni_(err);
       if (!hataGeciciMi_(err)) {
-        satiriPesEdildiOlarakIsaretle_(sheet, row, err.message, simdi);
+        satiriPesEdildiOlarakIsaretle_(sheet, row, temizHataMetni, simdi);
         pesEdildiBildirimGonder_(
           sheet,
           row.chatId,
           row.text,
-          err.message,
+          temizHataMetni,
           row.satirNo,
         );
         return;
       }
 
       if (sonAsamaMi_(row.denemeAsamasi)) {
-        satiriPesEdildiOlarakIsaretle_(sheet, row, err.message, simdi);
+        satiriPesEdildiOlarakIsaretle_(sheet, row, temizHataMetni, simdi);
         pesEdildiBildirimGonder_(
           sheet,
           row.chatId,
           row.text,
-          err.message,
+          temizHataMetni,
           row.satirNo,
         );
         return;
@@ -736,23 +781,23 @@ function zamanlanmisTekrarDenemeyiIsle() {
 
       var yeniAsama = row.denemeAsamasi + 1;
       try {
-        var gecikmeSaat = sonrakiGecikmeSaat_(yeniAsama);
-        var yeniTriggerId = zamanliTetikleyiciKur_(gecikmeSaat);
+        var gecikmeDakika = sonrakiGecikmeDakika_(yeniAsama);
+        var yeniTriggerId = zamanliTetikleyiciKur_(gecikmeDakika);
         var yeniSonrakiZaman = new Date(
-          simdi.getTime() + gecikmeSaat * 60 * 60 * 1000,
+          simdi.getTime() + gecikmeDakika * 60 * 1000,
         );
         satiriGuncelle_(sheet, row, {
           durum: RETRY_DURUM.BEKLIYOR,
           denemeAsamasi: yeniAsama,
           sonrakiDenemeZamani: yeniSonrakiZaman,
-          sonHataMesaji: err.message,
+          sonHataMesaji: temizHataMetni,
           sonDenemeZamani: simdi,
           triggerId: yeniTriggerId,
         });
         log_("yenidenDeneme.sonraki-asama", {
           updateId: row.updateId,
           asama: yeniAsama,
-          gecikmeSaat: gecikmeSaat,
+          gecikmeDakika: gecikmeDakika,
         });
       } catch (triggerErr) {
         logHata_("yenidenDeneme.trigger-kurulamadi-KRITIK", triggerErr);

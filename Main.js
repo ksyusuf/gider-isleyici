@@ -173,14 +173,19 @@ function doPost(e) {
     // etmeksizin Fitness projesiyle paylaşılan kuyruğa da yazılır — bkz.
     // Queue.js. Fitness kendi off/blok filtresiyle kendine ait olmayanları
     // zaten eliyor; burada hiçbir sınıflandırma yapılmaz.
-    kuyrugaEkle_(update.update_id, chatId, text, message.date);
+    kuyrugaEkle_(update.update_id, chatId, text, message.date, message.message_id);
 
     // `/` ile başlayan komutlar Gemini'ye hiç gitmeden burada, deterministik
     // olarak işlenir (bkz. Telegram.js > islemKomut_ ve apps-script/CLAUDE.md madde 2).
     if (text.trim().charAt(0) === "/") {
-      var komutCevabi = islemKomut_(text);
+      var komutCevabi = islemKomut_(text, chatId, update.update_id);
       log_("doPost.komut-cevap", komutCevabi);
-      sendTelegramMessage_(chatId, komutCevabi);
+      // "Markdown" ile gönderilir: komut çıktıları tamamen bizim
+      // şablonlarımız + telegramAlinti_ ile backtick'lenmiş kullanıcı
+      // metinlerinden oluşur (Gemini'nin serbest metnini İÇERMEZ), bu
+      // yüzden dengesiz özel karakter riski düşük (bkz. sendTelegramMessage_
+      // fallback'i, yine de bir güvenlik ağı sağlıyor).
+      sendTelegramMessage_(chatId, komutCevabi, "Markdown");
       log_("doPost.tamamlandi", { toplamSureMs: Date.now() - baslangic });
       return respondOk_();
     }
@@ -200,7 +205,8 @@ function doPost(e) {
             chatId,
             text,
             message.date,
-            mesajHatasi.message,
+            kullaniciyaGosterilecekHataMetni_(mesajHatasi),
+            message.message_id,
           );
           sendTelegramMessage_(chatId, GEMINI_YOGUN_KULLANICI_MESAJI);
           log_("doPost.tamamlandi", {
@@ -220,8 +226,8 @@ function doPost(e) {
           throw new Error(
             "Otomatik tekrar deneme kuyruğa eklenemedi: " +
               kuyrukHatasi.message +
-              " (orijinal Gemini hatası: " +
-              mesajHatasi.message +
+              " (orijinal hata: " +
+              kullaniciyaGosterilecekHataMetni_(mesajHatasi) +
               ")",
           );
         }
@@ -237,7 +243,8 @@ function doPost(e) {
             chatId,
             text,
             message.date,
-            mesajHatasi.message,
+            kullaniciyaGosterilecekHataMetni_(mesajHatasi),
+            message.message_id,
           );
           log_("doPost.tamamlandi", {
             toplamSureMs: Date.now() - baslangic,
@@ -249,8 +256,8 @@ function doPost(e) {
           throw new Error(
             "Kalıcı hata kuyruğa yazılamadı: " +
               kuyrukHatasi.message +
-              " (orijinal Gemini hatası: " +
-              mesajHatasi.message +
+              " (orijinal hata: " +
+              kullaniciyaGosterilecekHataMetni_(mesajHatasi) +
               ")",
           );
         }
@@ -273,7 +280,8 @@ function doPost(e) {
       try {
         sendTelegramMessage_(
           hedefChatId,
-          "⚠️ Bir hata oluştu, işlem tamamlanamadı: " + err.message,
+          "⚠️ Bir hata oluştu, işlem tamamlanamadı: " +
+            kullaniciyaGosterilecekHataMetni_(err),
         );
       } catch (gonderimHatasi) {
         logHata_("doPost.hata-mesaji-gonderilemedi", gonderimHatasi);

@@ -11,11 +11,14 @@
  * RetryCore.js'ten aynen kullanır — kendi bookkeeping mantığını tekrarlamaz.
  *
  * İlgili diğer dosyalar:
- *   - retry/RetryCore.js: RETRY_DURUM, kuyrukTumSatirlariOku_, satiriGuncelle_, RETRY_HANDLER_FN_ADI
+ *   - retry/RetryCore.js: RETRY_DURUM, kuyrukTumSatirlariOku_, satiriGuncelle_,
+ *     zamanliTetikleyiciSil_, gecenSureyiIfadeEt_, RETRY_HANDLER_FN_ADI
  *   - Queue.js: getOrCreateQueueSheet_
- *   - Gemini.js: mesajiIsleVeYanitla_ (SADECE pesEdilenleriTekrarDene_ tarafından çağrılır)
- *   - Telegram.js: islemKomut_ (`/pesedilenler`/`/pesdene` komutlarını bu dosyadaki
- *     fonksiyonlara yönlendirir)
+ *   - Gemini.js: mesajiIsleVeYanitla_ (SADECE pesEdilenleriTekrarDene_ tarafından
+ *     çağrılır) / kullaniciyaGosterilecekHataMetni_
+ *   - Telegram.js: islemKomut_ (`/pesedilenler`/`/pesdene`/`/sonmesajisil`
+ *     komutlarını bu dosyadaki fonksiyonlara yönlendirir) / telegramAlinti_ /
+ *     telegramMesajiSil_
  */
 
 /**
@@ -40,17 +43,14 @@ function pesEdilenleriListele_() {
       row.ilkHataZamani instanceof Date
         ? row.ilkHataZamani.getTime()
         : new Date(row.ilkHataZamani).getTime();
-    var saatOnce = Math.max(
-      1,
-      Math.round((simdi.getTime() - ilkHataMs) / 3600000),
-    );
+    var neKadarOnce = gecenSureyiIfadeEt_(simdi.getTime() - ilkHataMs);
     return (
       i +
       1 +
       ". (" +
-      saatOnce +
-      " saat önce) " +
-      row.text +
+      neKadarOnce +
+      " önce) " +
+      telegramAlinti_(row.text) +
       "\n   Hata: " +
       row.sonHataMesaji
     );
@@ -104,11 +104,12 @@ function pesEdilenleriTekrarDene_() {
       });
       basarili.push({ text: row.text, cevap: cevapMetni });
     } catch (err) {
+      var temizHataMetni = kullaniciyaGosterilecekHataMetni_(err);
       satiriGuncelle_(sheet, row, {
-        sonHataMesaji: err.message,
+        sonHataMesaji: temizHataMetni,
         sonDenemeZamani: simdi,
       });
-      basarisiz.push({ text: row.text, hata: err.message });
+      basarisiz.push({ text: row.text, hata: temizHataMetni });
     }
   });
 
@@ -120,7 +121,7 @@ function pesEdilenleriTekrarDene_() {
         " mesaj başarıyla işlendi:\n" +
         basarili
           .map(function (b, i) {
-            return i + 1 + ". " + b.text + "\n   " + b.cevap;
+            return i + 1 + ". " + telegramAlinti_(b.text) + "\n   " + b.cevap;
           })
           .join("\n\n"),
     );
@@ -132,12 +133,84 @@ function pesEdilenleriTekrarDene_() {
         " mesaj hâlâ başarısız, PES_EDILDI'de kaldı:\n" +
         basarisiz
           .map(function (b, i) {
-            return i + 1 + ". " + b.text + "\n   Hata: " + b.hata;
+            return i + 1 + ". " + telegramAlinti_(b.text) + "\n   Hata: " + b.hata;
           })
           .join("\n\n"),
     );
   }
   return bloklar.join("\n\n");
+}
+
+/**
+ * `/sonmesajisil` komutunun çıktısı: bu chat'e ait, komutun KENDİ satırı
+ * (`buKomutunUpdateId` — komut mesajı da `kuyrugaEkle_` tarafından ondan
+ * ÖNCE eklenmiş olacağı için "son satır" aramasının komutu yakalamaması
+ * gerekir) HARİÇ en son satırı bulur:
+ *   - `BEKLIYOR`/`ISLENIYOR` ise kurulu trigger'ı (varsa) iptal eder.
+ *   - Durumu `SILINDI` yapar (TAMAMLANDI gibi FIFO ile temizlenebilir hale
+ *     gelir, ASLA "unutulmuş harcama" sayılmaz çünkü kullanıcı BİLEREK iptal
+ *     etti).
+ *   - Telegram'daki mesajı silmeyi DENER (best-effort — sadece son 48 saat
+ *     içindeki mesajlar için çalışır, bkz. Telegram.js > telegramMesajiSil_).
+ *
+ * KAPSAM DIŞI (bilinçli): Expenses (D:I) harcama tablosuna DOKUNMAZ — eğer
+ * mesaj zaten başarıyla işlenip harcama tabloya yazıldıysa (durum=TAMAMLANDI/
+ * boş), o harcama satırı silinmez. Taksitli harcama nedeniyle "hangi satır
+ * en son yazıldı" güvenilir şekilde bilinemiyor (bkz. Geliştirme fikirleri
+ * madde 3, `/iptal` fikri aynı sebeple askıya alınmıştı) — bu risk burada da
+ * kapsam dışı tutuldu.
+ * @param {number|string} chatId
+ * @param {number} buKomutunUpdateId
+ * @return {string}
+ */
+function sonMesajiSil_(chatId, buKomutunUpdateId) {
+  var sheet = getOrCreateQueueSheet_();
+  var adaylar = kuyrukTumSatirlariOku_(sheet)
+    .filter(function (row) {
+      return (
+        String(row.chatId) === String(chatId) &&
+        Number(row.updateId) !== Number(buKomutunUpdateId)
+      );
+    })
+    .sort(function (a, b) {
+      return b.satirNo - a.satirNo;
+    });
+
+  if (adaylar.length === 0) {
+    return "Silinecek önceki bir mesaj bulunamadı.";
+  }
+
+  var hedef = adaylar[0];
+
+  if (
+    hedef.durum === RETRY_DURUM.BEKLIYOR ||
+    hedef.durum === RETRY_DURUM.ISLENIYOR
+  ) {
+    zamanliTetikleyiciSil_(hedef.triggerId);
+  }
+
+  satiriGuncelle_(sheet, hedef, {
+    durum: RETRY_DURUM.SILINDI,
+    triggerId: "",
+  });
+
+  var telegramdanSilindiMi = hedef.messageId
+    ? telegramMesajiSil_(chatId, hedef.messageId)
+    : false;
+
+  var alinti = telegramAlinti_(hedef.text);
+  if (telegramdanSilindiMi) {
+    return (
+      "🗑️ Mesaj silindi: " +
+      alinti +
+      "\nOtomatik tekrar deneme (varsa) iptal edildi."
+    );
+  }
+  return (
+    "🗑️ Telegram'daki mesajı silemedim (48 saatten eski olabilir ya da zaten silinmiş): " +
+    alinti +
+    "\nAma otomatik tekrar deneme (varsa) iptal edildi."
+  );
 }
 
 // ============================================================================
