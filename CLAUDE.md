@@ -332,8 +332,11 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   **Kasıtlı olarak sürekli/periyodik bir trigger YOK** (kullanıcı kararı, ilk
   önerilen "tek kalıcı periyodik tarayıcı" tasarımı reddedildi) — her trigger,
   bir mesajın gerçekten başarısız kalmasının doğal bir sonucu olarak kurulur.
-  Aşama gecikmeleri `RETRY_BACKOFF_SAAT = [1, 1, 2, 2, 4]` (saat, 5 aşama,
-  toplam ~10 saat). Trigger ateşlendiğinde yine Katman 1 (3 hızlı deneme)
+  Aşama gecikmeleri `RETRY_BACKOFF_DAKIKA = [10, 20, 40, 60, 60, 120, 120,
+  240]` (dakika, 8 aşama, toplam ~11 saat 10 dakika — 2026-09-29'da ilk üç
+  aşama olarak 10-20-40 dakika eklendi, kullanıcı kararı: kısa/hızlı geçici
+  blipler için önceki "1 saatte başla" çok yavaştı). Trigger ateşlendiğinde
+  yine Katman 1 (3 hızlı deneme)
   çalışır; başarısızsa BİR SONRAKİ aşama için yeni trigger kurulur ve
   ÖNCEKİ (artık ateşlenmiş) trigger silinir — Apps Script'in tek seferlik
   (`after`) trigger'ları ateşlendikten sonra KENDİLİĞİNDEN silinmediği için bu
@@ -342,44 +345,48 @@ hızlı hem de saatlik ölçekte bir tekrar deneme mekanizması gerekiyor.
   **Ayrı bir sekme YOK — `telegram_queue` (Queue.js) yeniden kullanılıyor
   (2026-09-26, kullanıcı kararı — ilk sürümde ayrı bir `yeniden_deneme_kuyrugu`
   sekmesi vardı, kullanıcı bunu istemedi: "mevcut kolon yapısının üzerine
-  devam et").** `Queue.js > QUEUE_HEADERS` artık 11 kolon: `update_id, chat_id,
+  devam et").** `Queue.js > QUEUE_HEADERS` artık 12 kolon: `update_id, chat_id,
   text, date` (Fitness'in okuduğu SABİT A:D sözleşmesi, hiç değişmedi) +
   `durum, deneme_asamasi, sonraki_deneme_zamani, ilk_hata_zamani,
-  son_deneme_zamani, son_hata_mesaji, trigger_id` (E:K, gider-isleyici'nin
-  KENDİ retry bookkeeping'i — Fitness bunları hiç okumaz). `doPost` zaten HER
+  son_deneme_zamani, son_hata_mesaji, trigger_id, message_id` (E:L,
+  gider-isleyici'nin KENDİ retry bookkeeping'i — Fitness bunları hiç okumaz;
+  `message_id` 2026-09-29'da `/sonmesajisil` için eklendi, bkz. aşağıdaki
+  "2026-09-29" bölümü). `doPost` zaten HER
   metin mesajı için Gemini'den ÖNCE `kuyrugaEkle_`'yi çağırıyordu (A:D'yi
   doldurur); Gemini başarısız olduğunda `retry/RetryCore.js > kuyrukSatiriniUpdateIdIleBul_`
-  AYNI satırı `update_id` ile bulup E:K'yı doldurur — YENİ bir satır asla
+  AYNI satırı `update_id` ile bulup E:L'yi doldurur — YENİ bir satır asla
   eklenmez (bulunamazsa, olmaması gereken bir durum için savunma amaçlı yeni
   satır eklenir). Mevcut (retry kolonları eklenmeden önce oluşmuş, 4 kolonlu)
   production sekmesi için `getOrCreateQueueSheet_` başlık satırını sessizce
-  E:K ile genişletir (tek seferlik, idempotent göç, A:D'deki veriye
+  E:L ile genişletir (tek seferlik, idempotent göç, A:D'deki veriye
   dokunmaz). Bu sekmedeki satırların TÜMÜ retry-takipli DEĞİLDİR — `durum`
   boşsa mesaj normal işlendi (ya da hiç Gemini'ye gitmedi, örn. komut).
 
-  **5. (son, 4 saatlik) aşama da başarısız olursa sistem PES EDER** — 6. bir
+  **8. (son, 4 saatlik) aşama da başarısız olursa sistem PES EDER** — 9. bir
   trigger KURULMAZ. Satır `durum=PES_EDILDI` olarak işaretlenir (**ASLA
   SİLİNMEZ** — bkz. aşağıdaki "FIFO temizlik" notu) ve kullanıcıya hem o
   mesaja özel bir bildirim hem de kuyrukta biriken TÜM `PES_EDILDI`
   satırlarının toplu bir özeti gönderilir (`pesEdildiBildirimGonder_`).
   Kalıcı bir HTTP hatası (400/401/403/404) alınırsa hiç retry denenmeden aynı
   PES_EDILDI yoluna girilir (`pesEdildiKuyruguEkleVeBildir_`, `doPost`'taki
-  ikinci catch dalı). Sistemin en fazla ~10 saat içinde ya çözüleceği ya da
+  ikinci catch dalı). Sistemin en fazla ~11 saat içinde ya çözüleceği ya da
   pes edeceği garanti olduğundan, önceki taslaktaki "1 hafta sonra özel
   bildirim" fikri gereksiz hale geldi ve uygulanmadı — PES_EDILDI + toplu
   bildirim onun doğrudan yerini aldı.
 
-  **"Yüksek talep" kısayolu (2026-09-26, kullanıcı isteği):** Gemini'nin
-  yaşanan gerçek hatalarının büyük çoğunluğu şu spesifik gövdeyle geliyor:
+  **"Yüksek talep" kısayolu (2026-09-26, kullanıcı isteği; 429 eklendi
+  2026-09-29) — bkz. aşağıdaki "2026-09-29" bölümü:** Gemini'nin yaşanan
+  gerçek hatalarının büyük çoğunluğu şu spesifik gövdeyle geliyor:
   `{"error":{"code":503,"message":"This model is currently experiencing high
   demand...","status":"UNAVAILABLE"}}`. Bu durumda sebep zaten KESİN olarak
   biliniyor (model o an aşırı yüklü) ve birkaç saniye arayla 3 kez hızlı
   tekrar denemek (Katman 1) bunu değiştirmez — sorun saatler sürebiliyor.
   `Gemini.js > hataYuksekTalepMi_` gövdedeki `error.status === "UNAVAILABLE"`
-  alanını tespit eder; tespit edilirse `callGeminiIleTekrarDeneme_` HİÇ
-  beklemeden (sleep yok, kalan deneme hakları harcanmadan) doğrudan Katman
-  2'ye devreder. Gövde parse edilemez ya da farklı bir 503/geçici hata ise
-  (örn. ağ zaman aşımı) normal 3-denemeli Katman 1 akışı aynen çalışmaya
+  alanını YA DA `httpStatus === 429`'u (kota/rate-limit dolu) tespit eder;
+  tespit edilirse `callGeminiIleTekrarDeneme_` HİÇ beklemeden (sleep yok,
+  kalan deneme hakları harcanmadan) doğrudan Katman 2'ye devreder. Gövde
+  parse edilemez ya da farklı bir 503/geçici hata ise (örn. ağ zaman aşımı)
+  normal 3-denemeli Katman 1 akışı aynen çalışmaya
   devam eder — bu kısayol SADECE bu spesifik, kesin-teşhisli duruma özeldir.
 
   **FIFO temizlik ve "asla unutma" ilkesi (2026-09-26, kullanıcı düzeltmesi
@@ -542,11 +549,110 @@ New version, kullanıcı tarafından) sonrası gerçek bir 503/429 senaryosuyla 
 da geçici olarak `CONFIG.geminiModel`'i geçersiz bir isimle değiştirip 404
 alarak doğrulanmalı.
 
+> **Not (2026-09-29):** yukarıdaki "1-1-2-2-4 saat, 5 aşama" ifadesi bu
+> doğrulamanın YAPILDIĞI ANA ait tarihsel bir kayıttır — aşama dizisi o
+> tarihten SONRA `RETRY_BACKOFF_DAKIKA` olarak 8 aşamaya (10-20-40dk,
+> 1-1-2-2-4sa) genişletildi, bkz. aşağıdaki "2026-09-29" bölümü.
+
 **Sonraki oturum için not:** bu tasarımın kabul edilmeden önceki bir sürümünde
 (kullanıcı tarafından reddedildi) tek bir kalıcı periyodik tarayıcı trigger
 öneriliyordu; kullanıcı açıkça "sürekli bir trigger istemiyorum... her
 başarısız ai isteği sonrası [mesaja özel] trigger kurulacak" dedi — bu karar
 yeniden tartışılmadan korunmalı.
+
+## Retry sistemi iyileştirmeleri v2 (2026-09-29)
+
+Prod'da bir süre çalıştıktan sonra kullanıcı 4 ayrı iyileştirme istedi; hepsi
+uygulandı, henüz `clasp push`/`deploy` edilmedi (kullanıcı tarafından
+yapılmalı).
+
+1. **`/sonmesajisil` komutu** (`Telegram.js > islemKomut_` → `retry/RetryCommands.js
+   > sonMesajiSil_`): bu chat'e ait, komutun kendi satırı HARİÇ en son satırı
+   bulur; `BEKLIYOR`/`ISLENIYOR` ise kurulu trigger'ı iptal eder
+   (`zamanliTetikleyiciSil_`), durumu `RETRY_DURUM.SILINDI` yapar (TAMAMLANDI
+   gibi FIFO'ya bırakılır, ASLA "unutulmuş harcama" sayılmaz — bilerek iptal
+   edildi), ve Telegram'daki mesajı silmeyi DENER (`Telegram.js >
+   telegramMesajiSil_`, `deleteMessage` API'si — özel sohbette bot kendisine
+   gelen mesajları silebiliyor, AMA sadece gönderildikten sonraki 48 saat
+   içinde; bu pencere dışında sessizce başarısız olur, sadece sistemdeki kayıt
+   iptal edilmiş olarak kalır). Bunun için `Queue.js > QUEUE_HEADERS`'a 12.
+   kolon olarak `message_id` (Telegram `update.message.message_id` —
+   `update_id`'den FARKLI bir alan) eklendi; `kuyrugaEkle_` bunu A:D'nin
+   `appendRow`'undan SONRA ayrı bir `setValue` ile L kolonuna yazıyor (A:D
+   sözleşmesi/Fitness etkilenmedi). **KAPSAM DIŞI (bilinçli):** Expenses (D:I)
+   harcama tablosuna DOKUNMAZ — taksitli harcama nedeniyle "hangi satır en son
+   yazıldı" güvenilir bilinemiyor (aynı sebeple `/iptal` fikri de askıya
+   alınmıştı, bkz. Geliştirme fikirleri madde 3).
+2. **429 (kota/rate-limit) artık "yüksek talep" gibi ele alınıyor** —
+   `Gemini.js > hataYuksekTalepMi_`'ye `httpStatus === 429` kontrolü eklendi;
+   429 alındığında Katman 1'in kalan senkron denemeleri (kısa aralıklarla
+   Gemini'yi tekrar yorması, kotayı daha da kötüleştirebilirdi) harcanmadan
+   doğrudan Katman 2'ye geçiliyor. **Ayrıca kullanıcı kararıyla backoff dizisi
+   genişletildi:** `RETRY_BACKOFF_SAAT = [1,1,2,2,4]` (saat) yerine
+   `RETRY_BACKOFF_DAKIKA = [10,20,40,60,60,120,120,240]` (dakika, 8 aşama,
+   toplam ~11sa10dk) — "1-1-2-2-4" dizisinin BAŞINA 10-20-40 dakikalık kısa
+   aşamalar eklendi (kısa/geçici blipler artık ilk denemede 1 saat değil 10
+   dakika sonra tekrar denenir). Bu, TÜM escalation yollarını (normal 3-deneme
+   tükenmesi, 503 kısayolu, 429 kısayolu) aynı şekilde etkiler — hepsi aşama
+   1'den (10dk) başlar. Yeni `RetryCore.js > gecenSureyiIfadeEt_(ms)` yardımcı
+   fonksiyonu "X dakika"/"X saat" ifadesini dinamik üretir (`zamanlanmisTekrarDenemeyiIsle`
+   ve `pesEdilenleriListele_` artık bunu kullanıyor — eskiden her şey saate
+   yuvarlanırdı, 10 dakikalık bir gecikme yanlışlıkla "1 saat önce"
+   gösterilirdi).
+
+   **429/döngü teşhis sonucu (kullanıcı "kota bir anda tükeniyor mu"
+   sorusuna cevaben):** Gerçek bir "sonsuz döngü" bulunamadı. Ama YUKARIDAKİ
+   429 düzeltmesi gerçek bir riski gideriyor: önceden 429 alındığında Katman
+   1 yine de 2sn/5sn aralıklarla 3 kez tekrar deniyordu — dolu bir kotanın
+   üstüne istek atmak durumu kötüleştirebilirdi. İkincil, düşük olasılıklı
+   bir teorik risk not edildi (kod değişikliği YAPILMADI, bkz. "Bilinen
+   varsayımlar" bölümü): `RETRY_MAX_SATIR_PER_TETIKLEME` (5) sınırını aşacak
+   şekilde 6+ mesajın trigger'ı TAM AYNI ANDA ateşlenirse, sınırı aşanlar
+   claim edilmeden trigger'ları "tükenir" ve BEKLIYOR'da kalıcı takılabilir —
+   kişisel/düşük hacimli kullanım için pratikte imkansıza yakın.
+3. **Ham API/JSON hata metinleri artık kullanıcıya sızmıyor** — yeni
+   `Gemini.js > kullaniciyaGosterilecekHataMetni_(err)` JSON gövdeyi ASLA
+   içermeyen kısa bir Türkçe açıklama üretir (429/503/kalıcı-HTTP/bilinmeyen-
+   HTTP/ağ-hatası için ayrı ayrı). `callGemini_`'nin "beklenmeyen yanıt" hata
+   mesajı da artık ham `govde`yi içermiyor (detay zaten `log_` ile loglanıyor).
+   Bu fonksiyon kullanıcıya/Sheets'e (`son_hata_mesaji` — `/pesedilenler`
+   üzerinden zaten Telegram'a dökülüyor) giden HER yerde kullanılıyor: `doPost`
+   (3 yer), `zamanlanmisTekrarDenemeyiIsle` (2 yer), `pesEdilenleriTekrarDene_`
+   (1 yer). Loglar (`logHata_`) DEĞİŞMEDİ — hâlâ ham/detaylı hata basılıyor,
+   sadece kullanıcı yüzeyine giden metin temizleniyor. `httpStatus`'u OLMAYAN
+   hatalar (kendi ürettiğimiz Türkçe mesajlar — kuyruklama/trigger hataları
+   gibi) bu fonksiyondan olduğu gibi geçer, YENİDEN yazılmaz.
+4. **Kullanıcı mesajları artık backtick ile alıntılanıyor** (kullanıcı
+   isteği — botun kendi metniyle karışmasın diye; kapsam SADECE alıntılanan
+   kullanıcı mesajları, botun/Gemini'nin ürettiği diğer serbest metinler
+   DEĞİŞMEDEN düz kaldı, regresyon riski yok). Yeni `Telegram.js >
+   telegramAlinti_(metin)` backtick'e sarar (içindeki literal backtick'i tek
+   tırnakla değiştirir). `sendTelegramMessage_` artık opsiyonel 3. parametre
+   `parseMode` alıyor; kullanılırsa `parse_mode` gönderiliyor VE gönderim
+   başarısız olursa (dengesiz `*`/`_`/backtick "can't parse entities" 400
+   verebilir) aynı metin parseMode OLMADAN bir kez daha deneniyor (güvenlik
+   ağı — biçimlendirme asla mesajın hiç gitmemesine yol açmamalı). `"Markdown"`
+   SADECE 3 çağrıya eklendi: `doPost`'un komut-cevabı gönderimi, ve
+   `pesEdildiBildirimGonder_`'ın 2 çağrısı — bunların hepsi ya tamamen bizim
+   şablonlarımız ya da alıntılanmış kullanıcı metni içeriyor, Gemini'nin
+   serbest metnini İÇERMİYOR (düşük risk).
+
+**Fitness'e dokunulmadı:** `c:\Users\Lenovo\Documents\YusufKisisel\Fitness`
+bu turda workspace'e eklendi ama kullanıcı açıkça "fitness modülümde
+düzenleme yapma" dedi — hiçbir Fitness dosyası okunmadı/değiştirilmedi. Yeni
+`message_id` kolonu Fitness'in okuduğu A:D'ye dokunmuyor.
+
+**Doğrulama:** Saf fonksiyonlar (`sonrakiGecikmeDakika_`, `sonAsamaMi_`,
+`gecenSureyiIfadeEt_`, `hataYuksekTalepMi_`, `kullaniciyaGosterilecekHataMetni_`,
+`telegramAlinti_`) scratchpad'te izole bir Node scriptiyle 33/33 PASS
+doğrulandı (JSON'un hiçbir hata metninde GÖRÜNMEDİĞİ teyit edildi). Fonksiyon
+envanteri (tüm dosyalardaki `function`/`const` isimleri) tekrar taranıp
+çakışma/eksik olmadığı doğrulandı, `node --check` her dosyada geçti. Sheet/
+trigger/Telegram etkileşimli kısımlar (`/sonmesajisil`, 429 escalation,
+Markdown gönderim) bu oturumda mock'lanmadı — yukarıdaki "Az-token doğrulama
+rehberi" tablosuna eklenen yeni satırlarla kullanıcı tarafından gerçek
+ortamda test edilmeli. **`clasp push` + AYNI deployment ID'ye `clasp deploy
+-i <id>` gerekiyor.**
 
 ## Bilinen varsayımlar / kırılgan noktalar
 
@@ -596,6 +702,16 @@ yeniden tartışılmadan korunmalı.
   olarak yaklaşılabilir; o noktada `zamanliTetikleyiciKur_` başarısız olursa
   kod mesajı sessizce kaybetmek yerine PES_EDILDI'ye düşürüp kullanıcıyı
   bilgilendirir (veri kaybı yok, sadece otomatik retry durur).
+- **(2026-09-29 teşhis notu)** `zamanlanmisTekrarDenemeyiIsle` aynı
+  ateşlenişte en fazla `RETRY_MAX_SATIR_PER_TETIKLEME` (5) satırı claim eder.
+  Eğer 6+ mesajın trigger'ı TAM AYNI ANDA ateşlenirse, sınırı aşan satırlar
+  claim edilmez ama tetikleyen tek-seferlik trigger'ları yine de "tükenir"
+  (bir daha ateşlenmez) — bu satırlar BEKLIYOR'da, artık ölü bir `trigger_id`
+  ile kalıcı olarak takılı kalabilir (kod değişikliği YAPILMADI, kabul edilen
+  bir kısıt). Kişisel/düşük hacimli kullanım için pratikte imkansıza yakın
+  (farklı mesajların backoff'larının milisaniye hassasiyetinde çakışması
+  gerekir) — `yenidenDenemeKuyruguDurumu()`'nda `bekleyen` sayısının
+  `kayitliTriggerSayisi`'nden yüksek görünmesi bu duruma işaret eder.
 
 ## Geliştirme fikirleri (öneriler)
 
@@ -619,20 +735,22 @@ efor/etkiye göre gruplanmış. Kullanıcı önceliklendirirse ayrıca planlanab
    - `/yardim` — botun nasıl kullanılacağını, örnek mesaj formatlarını
      anlatan statik bir metin döner
 2. **`doPost`'ta `/` ile başlayan komutları Gemini'ye göndermeden doğrudan
-   işlemek** — **UYGULANDI (2026-08-31, genişletildi 2026-09-26):**
-   `Telegram.js > islemKomut_` + `doPost`'taki erken-çıkış dalı. Komutlar:
-   `/son [N]`, `/toplam [N]`, `/pesedilenler`, `/pesdene`,
-   `/komutlar` (komut listesi); tanınmayan `/xxx` → "Komut bulunamadı" +
-   aynı liste (`KOMUT_LISTESI_METNI`). `/pesedilenler` ve
+   işlemek** — **UYGULANDI (2026-08-31, genişletildi 2026-09-26 ve
+   2026-09-29):** `Telegram.js > islemKomut_` + `doPost`'taki erken-çıkış
+   dalı. Komutlar: `/son [N]`, `/toplam [N]`, `/pesedilenler`, `/pesdene`,
+   `/sonmesajisil`, `/komutlar` (komut listesi); tanınmayan `/xxx` → "Komut
+   bulunamadı" + aynı liste (`KOMUT_LISTESI_METNI`). `/pesedilenler` ve
    `/pesdene` (`retry/RetryCommands.js`) kullanıcının açık isteğiyle eklendi —
    sırasıyla `PES_EDILDI` (bkz. "Gemini API geçici/kalıcı hatalarına karşı
    Katman 2" bölümü) mesajları listeler ve
    hepsini topluca (Katman 1 ile, yeni trigger KURMADAN) şimdi tekrar dener;
    başarılı olanlar `TAMAMLANDI`'ya geçer, başarısız kalanlar `PES_EDILDI`'de
-   kalır (silinmez). **İstisna:** `/pesedilenleridene` diğer komutların
-   aksine Gemini'ye gider (bilinçli, kullanıcı talebiyle tetiklenen manuel bir
-   toplu deneme). Diğer komutlar sıfır Gemini API çağrısı/maliyeti — Node
-   üzerinde mock Sheets/Apps Script globalleriyle doğrulandı.
+   kalır (silinmez). `/sonmesajisil` (`sonMesajiSil_`, bkz. "Retry sistemi
+   iyileştirmeleri v2" bölümü) bir önceki mesajı iptal eder/silmeyi dener.
+   **İstisna:** `/pesdene` diğer komutların aksine Gemini'ye gider (bilinçli,
+   kullanıcı talebiyle tetiklenen manuel bir toplu deneme). Diğer komutlar
+   sıfır Gemini API çağrısı/maliyeti — Node üzerinde mock Sheets/Apps Script
+   globalleriyle doğrulandı.
 3. **`/iptal` — son eklenen harcamayı geri alma** — **ASKIYA ALINDI
    (2026-08-31, kullanıcı kararı).** Orijinal fikir "son eklenen satır =
    `SHEET_LAYOUT.START_ROW`" varsayımına dayanıyordu; bu artık geçerli
@@ -896,14 +1014,18 @@ harness'ı kurmaya ÇALIŞILMAMALI, önce bu tablo denenmeli.
 
 | Kontrol edilecek | Nasıl (editörden elle çalıştır / Logger'a bak) |
 | --- | --- |
-| Aşama gecikmeleri (`RETRY_BACKOFF_SAAT`) | `sonrakiGecikmeSaat_(3)` çalıştır → `RETRY_BACKOFF_SAAT[2]` ile aynı değeri döner (dizi değişirse referans da değişir, sabit sayı değil) |
-| Son aşama tespiti | `sonAsamaMi_(RETRY_BACKOFF_SAAT.length)` → `true`; bir eksiği → `false` |
+| Aşama gecikmeleri (`RETRY_BACKOFF_DAKIKA`) | `sonrakiGecikmeDakika_(3)` çalıştır → `RETRY_BACKOFF_DAKIKA[2]` (40) ile aynı değeri döner (dizi değişirse referans da değişir, sabit sayı değil) |
+| Son aşama tespiti | `sonAsamaMi_(RETRY_BACKOFF_DAKIKA.length)` → `true`; bir eksiği → `false` |
 | Hata sınıflandırması | `hataGeciciMi_({httpStatus:404})` → `false`; `hataGeciciMi_({})` → `true` |
-| "Yüksek talep" tespiti | `hataYuksekTalepMi_({httpBody:'{"error":{"status":"UNAVAILABLE"}}'})` → `true` |
+| "Yüksek talep"/kota tespiti | `hataYuksekTalepMi_({httpBody:'{"error":{"status":"UNAVAILABLE"}}'})` → `true`; `hataYuksekTalepMi_({httpStatus:429})` → `true` |
+| Temiz hata metni JSON içermiyor | `kullaniciyaGosterilecekHataMetni_({httpStatus:503, httpBody:'{"error":{"status":"UNAVAILABLE"}}'})` çalıştır → sonuçta `{`/`}` OLMAMALI |
+| Süre ifadesi | `gecenSureyiIfadeEt_(9*60000)` → `"9 dakika"`; `gecenSureyiIfadeEt_(125*60000)` → `"2 saat"` |
+| Alıntı escape | `telegramAlinti_("ic\`kart")` → içindeki backtick tek tırnağa döner, dışı backtick'li kalır |
 | Kuyruğun canlı özeti | `yenidenDenemeKuyruguDurumu()` çalıştır, Logger'daki `bekleyen`/`pesEdilen`/`tamamlanan`/`kayitliTriggerSayisi` alanlarına bak |
-| Escalation zinciri (uçtan uca, gerçek) | `CONFIG.geminiModel`'i geçici olarak geçersiz bir isimle değiştir, gerçek bir Telegram mesajı gönder; `telegram_queue`'da o satırın `durum`/`deneme_asamasi`/`sonraki_deneme_zamani` sütunlarının saatlerle ilerleyişini izle |
+| Escalation zinciri (uçtan uca, gerçek) | `CONFIG.geminiModel`'i geçici olarak geçersiz bir isimle değiştir, gerçek bir Telegram mesajı gönder; `telegram_queue`'da o satırın `durum`/`deneme_asamasi`/`sonraki_deneme_zamani` sütunlarının dakika/saatlerle ilerleyişini izle |
 | FIFO temizlik | Sheet'e elle `RETRY_TEMIZLIK_ESIK_MS`'den eski bir tarih + `durum=TAMAMLANDI` satırı ekle, herhangi bir mesaj gönderip `kuyrugaEkle_`'yi tetikle, satırın silindiğini gör |
-| `/pesedilenler`, `/pesdene`, `/komutlar` | Doğrudan Telegram'dan gönder, cevabı oku |
+| `/pesedilenler`, `/pesdene`, `/komutlar` | Doğrudan Telegram'dan gönder, cevabı oku — listelenen mesaj metinlerinin backtick içinde göründüğünü gözle doğrula |
+| `/sonmesajisil` | Bir test mesajı gönder, hemen ardından `/sonmesajisil` gönder; queue'da o satırın `durum=SILINDI` olduğunu VE (48 saat içindeyse) Telegram'daki mesajın silindiğini doğrula. `BEKLIYOR` bir mesajda denenirse `yenidenDenemeKuyruguDurumu()`'nda `kayitliTriggerSayisi`'nin de düştüğünü kontrol et |
 
 Kod satır numaralarına referans VERİLMEDİ (kod değiştikçe kayar) — yalnızca
 fonksiyon adları, çünkü onlar kararlı.
@@ -916,28 +1038,26 @@ fonksiyon adları, çünkü onlar kararlı.
   desteklenecek?
 - `gemini-3.5-flash` gerçekten kullanılabilir bir model adı mı, yoksa çalışan
   güncel bir model adıyla mı değiştirilmeli?
-- **Retry sistemi + modülerleştirme deploy edildi (2026-09-26,
-  `clasp deploy -i AKfycbxf7fYiksz8ZUNR_ymZKG-k-v0cJCQE3U_eHibUUK_q9NDvXmUFJ9mGT0nqBPZqmBdmqQ` → versiyon 13)
-  ama gerçek trafikte 2 sorun bulundu ve düzeltildi** (bkz. yukarıdaki "FIFO
-  silme toplu (batch) hale getirildi" ve "Prod'da gerçek bir 503/UNAVAILABLE
-  mesajı hiç kuyruklanmadı" notları): (1) FIFO temizlik artık `deleteRows`
-  ile toplu siliyor, (2) `yenidenDenemeKuyruguEkle_` artık trigger
-  kurulamazsa PES_EDILDI'ye düşüyor VE `doPost`'un kuyruklama-hatası
-  fallback'i artık gerçek hatayı gösteriyor (maskelenmiyor). **Bu düzeltmeler
-  henüz push/deploy edilmedi** — sıradaki adım:
-  1. `clasp push` + `clasp deploy -i AKfycbxf7fYiksz8ZUNR_ymZKG-k-v0cJCQE3U_eHibUUK_q9NDvXmUFJ9mGT0nqBPZqmBdmqQ`
-     (AYNI deployment ID'ye — yeni bir deployment YARATMAYIN, aksi halde
-     webhook'un işaret ettiği URL değişmeden kalır ve yeni kod hiç
-     çalışmaz).
-  2. Apps Script editöründen `webhookDurumu()` çalıştırıp `url` alanındaki
+- **Prod'da 2026-09-26 deploy'unda (versiyon 13) bulunan 2 sorun +
+  2026-09-29'da istenen 4 iyileştirme HENÜZ push/deploy edilmedi** — hepsi
+  aynı sıradaki `clasp push` + AYNI deployment ID'ye (`AKfycbxf7fYiksz8ZUNR_ymZKG-k-v0cJCQE3U_eHibUUK_q9NDvXmUFJ9mGT0nqBPZqmBdmqQ`)
+  `clasp deploy -i <id>` ile gönderilecek (yeni bir deployment YARATMAYIN —
+  webhook'un işaret ettiği URL değişmeden kalır, yeni kod hiç çalışmaz).
+  Detaylar: 2026-09-26 düzeltmeleri (FIFO toplu silme, trigger-kurulamadı
+  fallback'i, hata-maskeleme düzeltmesi) yukarıdaki "Gemini API geçici/kalıcı
+  hatalarına karşı Katman 2" bölümünde; 2026-09-29 iyileştirmeleri
+  (`/sonmesajisil`, 429 koruması + genişletilmiş backoff, temiz hata
+  metinleri, backtick alıntılama) yukarıdaki "Retry sistemi iyileştirmeleri
+  v2" bölümünde. Deploy sonrası sırayla doğrulanmalı:
+  1. Apps Script editöründen `webhookDurumu()` çalıştırıp `url` alanındaki
      deployment ID'nin yukarıdaki ID ile eşleştiği doğrulanmalı (`clasp
      deployments` çıktısında 2 deployment var — biri `@HEAD`, biri bu
-     versiyonlu ID; hangisi webhook'a kayıtlı olduğu netleşmeli).
-  3. Editörden herhangi bir fonksiyon (`webhookDurumu` yeterli) bir kez elle
-     çalıştırılıp çıkan "Review permissions" ekranı onaylanmalı — trigger
-     oluşturma (`ScriptApp.newTrigger`) için gereken `script.scriptapp`
-     kapsamının onaylanmış olduğundan emin olmak için (push/deploy bunu
+     versiyonlu ID; hangisi webhook'a kayıtlı olduğu netleşmeli). Aynı
+     çalıştırma trigger yetkisi ("script.scriptapp") için "Review
+     permissions" ekranını da tetikleyip onaylatmalı (push/deploy bunu
      otomatik yapmaz).
-  4. Gerçek bir 503/UNAVAILABLE ya da geçici `CONFIG.geminiModel` bozarak
-     (404) uçtan uca doğrulanmalı; `yenidenDenemeKuyruguDurumu()` çıktısı ve
-     `telegram_queue`'daki satırın `durum` sütunu kontrol edilmeli.
+  2. Gerçek bir 503/429 ya da geçici `CONFIG.geminiModel` bozarak (404)
+     uçtan uca doğrulanmalı; `yenidenDenemeKuyruguDurumu()` çıktısı ve
+     `telegram_queue`'daki satırın `durum`/aşama sütunları kontrol edilmeli.
+  3. `/sonmesajisil`, backtick alıntılama ve Markdown gönderimi yukarıdaki
+     "Az-token doğrulama rehberi" tablosundaki adımlarla test edilmeli.

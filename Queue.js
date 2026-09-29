@@ -53,6 +53,7 @@ const QUEUE_HEADERS = [
   "son_deneme_zamani",
   "son_hata_mesaji",
   "trigger_id",
+  "message_id",
 ];
 
 /**
@@ -102,6 +103,11 @@ function getOrCreateQueueSheet_() {
  * Bu çağrı SADECE A:D'yi doldurur (E:K, yani retry bookkeeping, bilerek boş
  * bırakılır) — mesaj Gemini'de başarısız olursa Retry.js bu AYNI satırı
  * update_id ile bulup E:K'yı sonradan doldurur, yeni bir satır EKLEMEZ.
+ * `messageId` (Telegram `update.message.message_id` — `update_id`'den FARKLI
+ * bir alan) ayrıca L kolonuna yazılır; `/sonmesajisil` komutunun Telegram
+ * `deleteMessage` çağrısı için gerekir (bkz. retry/RetryCommands.js >
+ * sonMesajiSil_). A:D'nin `appendRow` ile yazılma şekli DEĞİŞMEDİ — L kolonu
+ * ayrı bir `setValue` ile doldurulur, Fitness'in A:D sözleşmesini etkilemez.
  *
  * Satır eklendikten sonra `Retry.js > eskiKayitlariTemizleKilitli_` çağrılır
  * — bu, `RETRY_TEMIZLIK_ESIK_MS`'i aşan (ve retry'a hiç girmemiş/TAMAMLANDI)
@@ -113,11 +119,15 @@ function getOrCreateQueueSheet_() {
  * @param {number|string} chatId
  * @param {string} text
  * @param {number} dateSaniye Telegram update.message.date (Unix saniye).
+ * @param {number} [messageId] Telegram update.message.message_id.
  */
-function kuyrugaEkle_(updateId, chatId, text, dateSaniye) {
+function kuyrugaEkle_(updateId, chatId, text, dateSaniye, messageId) {
   try {
     var sheet = getOrCreateQueueSheet_();
     sheet.appendRow([updateId, chatId, text, new Date(dateSaniye * 1000)]);
+    if (messageId !== undefined && messageId !== null) {
+      sheet.getRange(sheet.getLastRow(), QUEUE_HEADERS.length).setValue(messageId);
+    }
     log_("kuyruk.eklendi", { updateId: updateId });
     eskiKayitlariTemizleKilitli_(sheet);
   } catch (err) {
