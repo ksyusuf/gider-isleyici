@@ -109,12 +109,13 @@ function getOrCreateQueueSheet_() {
  * sonMesajiSil_). A:D'nin `appendRow` ile yazılma şekli DEĞİŞMEDİ — L kolonu
  * ayrı bir `setValue` ile doldurulur, Fitness'in A:D sözleşmesini etkilemez.
  *
- * Satır eklendikten sonra `Retry.js > eskiKayitlariTemizleKilitli_` çağrılır
- * — bu, `RETRY_TEMIZLIK_ESIK_MS`'i aşan (ve retry'a hiç girmemiş/TAMAMLANDI)
- * satırların temizliğinin HER mesajda bir fırsat bulmasını sağlar. Aksi
- * halde temizlik SADECE bir Gemini hatası olduğunda tetiklenirdi — Gemini
- * hiç hata vermezse hiç çalışmazdı (2026-09-26 kararı, bkz. Retry.js dosya
- * başı yorumu).
+ * Satır eklendikten sonra `retry/RetryCore.js > bakimYapKilitli_` çağrılır —
+ * bu, hem `RETRY_TEMIZLIK_ESIK_MS`'i aşan (ve retry'a hiç girmemiş/TAMAMLANDI)
+ * satırların FIFO temizliğinin HEM de sahipsiz kalmış (artık hiçbir satırın
+ * işaret etmediği) trigger'ların temizliğinin HER mesajda bir fırsat
+ * bulmasını sağlar. Aksi halde bu bakım SADECE bir Gemini hatası olduğunda
+ * tetiklenirdi — Gemini hiç hata vermezse hiç çalışmazdı (2026-09-26/
+ * 2026-09-29 kararları, bkz. RetryCore.js dosya başı yorumu).
  * @param {number} updateId
  * @param {number|string} chatId
  * @param {string} text
@@ -129,7 +130,7 @@ function kuyrugaEkle_(updateId, chatId, text, dateSaniye, messageId) {
       sheet.getRange(sheet.getLastRow(), QUEUE_HEADERS.length).setValue(messageId);
     }
     log_("kuyruk.eklendi", { updateId: updateId });
-    eskiKayitlariTemizleKilitli_(sheet);
+    bakimYapKilitli_(sheet);
   } catch (err) {
     logHata_("kuyruk.HATA", err);
   }
