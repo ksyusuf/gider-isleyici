@@ -66,13 +66,15 @@
  * olursa olsun dokunulmaz, çünkü bir harcamayı sessizce unutmak/kaybetmek
  * kabul edilemez (kullanıcı kararı, Fitness'ten bağımsız).
  *
- * Temizlik, `zamanlanmisTekrarDenemeyiIsle`/`yenidenDenemeKuyruguEkle_`/
+ * Temizlik (`bakimYap_` = FIFO temizlik + sahipsiz-trigger taraması, bkz.
+ * aşağıdaki "2026-09-29 sahipsiz trigger temizliği" notu),
+ * `zamanlanmisTekrarDenemeyiIsle`/`yenidenDenemeKuyruguEkle_`/
  * `pesEdildiKuyruguEkleVeBildir_`'e EK OLARAK `Queue.js > kuyrugaEkle_`'den
- * de (kilitli sarmalayıcı `eskiKayitlariTemizleKilitli_` ile) çağrılır — bu
- * fonksiyon HER metin mesajında (Gemini başarılı olsun olmasın) çalıştığı
- * için, Gemini hiç hata vermese bile temizlik düzenli fırsat bulur (sürekli
- * bir trigger kurmadan, 2026-09-26 kullanıcı kararı — aksi halde ilk temizlik
- * ancak ilk Gemini hatasında tetiklenirdi).
+ * de (kilitli sarmalayıcı `bakimYapKilitli_` ile) çağrılır — bu fonksiyon HER
+ * metin mesajında (Gemini başarılı olsun olmasın) çalıştığı için, Gemini hiç
+ * hata vermese bile bakım düzenli fırsat bulur (sürekli bir trigger kurmadan,
+ * 2026-09-26 kullanıcı kararı — aksi halde ilk temizlik ancak ilk Gemini
+ * hatasında tetiklenirdi).
  *
  * İlgili diğer dosyalar:
  *   - Queue.js: QUEUE_HEADERS/getOrCreateQueueSheet_/kuyrugaEkle_ (paylaşılan
@@ -256,13 +258,12 @@ function satiriPesEdildiOlarakIsaretle_(sheet, row, hataMesaji, simdi) {
  * olursa olsun ASLA silinmez — bir harcamayı sessizce unutmak/kaybetmek kabul
  * edilemez (kullanıcı kararı, bu iki durum için Fitness'ten bağımsız).
  *
- * Ayrı bir periyodik trigger YOK (kullanıcı kararı); bu fonksiyon retry'a
- * özel üç giriş noktasının (yenidenDenemeKuyruguEkle_,
+ * Ayrı bir periyodik trigger YOK (kullanıcı kararı); bu fonksiyon `bakimYap_`
+ * üzerinden retry'a özel üç giriş noktasının (yenidenDenemeKuyruguEkle_,
  * pesEdildiKuyruguEkleVeBildir_, zamanlanmisTekrarDenemeyiIsle) başında ucuz
- * bir ilk-adım olarak çağrılır VE (kilitli sarmalayıcısı
- * eskiKayitlariTemizleKilitli_ üzerinden) `Queue.js > kuyrugaEkle_`'den HER
- * mesajda çağrılır — böylece Gemini hiç hata vermese bile temizlik düzenli
- * fırsat bulur.
+ * bir ilk-adım olarak çağrılır VE (kilitli sarmalayıcısı `bakimYapKilitli_`
+ * üzerinden) `Queue.js > kuyrugaEkle_`'den HER mesajda çağrılır — böylece
+ * Gemini hiç hata vermese bile temizlik düzenli fırsat bulur.
  *
  * Silme İŞLEMİ TOPLU yapılır (kullanıcı kararı, 2026-09-26): tek tek
  * `deleteRow` çağırmak yerine, silinecek satır numaraları ardışık aralıklara
@@ -325,26 +326,85 @@ function eskiKayitlariTemizle_(sheet, simdi) {
 }
 
 /**
- * `eskiKayitlariTemizle_`'yi LockService ile korunan kısa bir kritik bölümde
- * çalıştırır — diğer üç giriş noktasıyla (yenidenDenemeKuyruguEkle_,
- * pesEdildiKuyruguEkleVeBildir_, zamanlanmisTekrarDenemeyiIsle) AYNI kilidi
- * kullanır, böylece aynı anda iki temizliğin çakışıp satır numaralarını
- * bozması önlenir. `Queue.js > kuyrugaEkle_` tarafından HER mesajda çağrılır
- * (Gemini başarılı olsun olmasın) — Gemini hiç hata vermese bile temizliğin
- * düzenli fırsat bulmasını garanti eder, sürekli bir trigger kurmadan
- * (2026-09-26 kullanıcı kararı).
+ * `RETRY_HANDLER_FN_ADI`'na kayıtlı, ama HİÇBİR `BEKLIYOR` satırın
+ * `trigger_id`'si tarafından referans verilmeyen (yani "sahipsiz") trigger'ları
+ * bulup GERÇEKTEN siler (disable değil — bkz. dosya başı "2026-09-29 sahipsiz
+ * trigger temizliği" notu). İki farklı kök sebebe karşı bir güvenlik ağıdır:
+ *   (a) bir trigger kuruldu ama hemen ardından satıra yazılamadı (kilit zaman
+ *       aşımı, Sheets hatası vb.) — bu durum artık `yenidenDenemeKuyruguEkle_`
+ *       ve `zamanlanmisTekrarDenemeyiIsle`'daki compensating-delete ile ayrıca
+ *       ÖNLENİYOR, ama bu sweep yine de ikinci bir güvenlik katmanı.
+ *   (b) bir satır DIŞTAN (örn. Sheets'te elle) silindi/değiştirildi — o satıra
+ *       ait trigger ateşlendiğinde artık hiçbir satır onu işaret etmiyor;
+ *       eski davranışta bu trigger sonsuza dek listede "ölü" kalıyordu, bu
+ *       fonksiyon onu bulup temizliyor.
+ * Sadece kendi handler'ımıza (`RETRY_HANDLER_FN_ADI`) ait trigger'lara
+ * dokunulur — projede başka bir fonksiyona ait trigger varsa hiç etkilenmez.
+ *
+ * Kabul edilen kalıntı risk (kullanıcı onayı, 2026-09-29): trigger kurulup
+ * satıra YAZILMADAN önceki çok kısa pencerede BAŞKA bir execution bu sweep'i
+ * çalıştırırsa, henüz hiçbir satıra bağlanmamış YENİ trigger'ı yanlışlıkla
+ * "sahipsiz" sayıp silebilir. Kişisel/düşük hacimli kullanım için pratikte
+ * ihmal edilebilir (iki execution'ın milisaniye hassasiyetinde çakışması
+ * gerekir) — ek önlem alınmadı, kod sadeliği tercih edildi.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  */
-function eskiKayitlariTemizleKilitli_(sheet) {
+function sahipsizTetikleyicileriTemizle_(sheet) {
+  var mesruIdler = kuyrukTumSatirlariOku_(sheet)
+    .filter(function (row) {
+      return row.durum === RETRY_DURUM.BEKLIYOR && row.triggerId;
+    })
+    .map(function (row) {
+      return row.triggerId;
+    });
+
+  ScriptApp.getProjectTriggers()
+    .filter(function (t) {
+      return t.getHandlerFunction() === RETRY_HANDLER_FN_ADI;
+    })
+    .forEach(function (t) {
+      var id = t.getUniqueId();
+      if (mesruIdler.indexOf(id) === -1) {
+        log_("yenidenDeneme.sahipsiz-trigger-temizlendi", { triggerId: id });
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+}
+
+/**
+ * Fırsat buldukça yapılan bakım işlerinin tek giriş noktası:
+ * `eskiKayitlariTemizle_` (FIFO) + `sahipsizTetikleyicileriTemizle_` (orphan
+ * trigger sweep). İkisi de aynı mantıkla (ucuz, her fırsatta çalışan bir
+ * ilk-adım) tasarlandığı için birlikte çağrılır.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Date} simdi
+ */
+function bakimYap_(sheet, simdi) {
+  eskiKayitlariTemizle_(sheet, simdi);
+  sahipsizTetikleyicileriTemizle_(sheet);
+}
+
+/**
+ * `bakimYap_`'ı LockService ile korunan kısa bir kritik bölümde çalıştırır —
+ * diğer giriş noktalarıyla (yenidenDenemeKuyruguEkle_,
+ * pesEdildiKuyruguEkleVeBildir_, zamanlanmisTekrarDenemeyiIsle) AYNI kilidi
+ * kullanır, böylece aynı anda iki bakımın çakışıp satır numaralarını/trigger
+ * durumunu bozması önlenir. `Queue.js > kuyrugaEkle_` tarafından HER mesajda
+ * çağrılır (Gemini başarılı olsun olmasın) — Gemini hiç hata vermese bile
+ * hem FIFO temizliği hem sahipsiz-trigger taraması düzenli fırsat bulur,
+ * sürekli bir trigger kurmadan (2026-09-26/2026-09-29 kullanıcı kararları).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ */
+function bakimYapKilitli_(sheet) {
   var lock = LockService.getScriptLock();
   try {
     lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
   } catch (err) {
-    logHata_("yenidenDeneme.temizlik-kilit-alinamadi", err);
+    logHata_("yenidenDeneme.bakim-kilit-alinamadi", err);
     return;
   }
   try {
-    eskiKayitlariTemizle_(sheet, new Date());
+    bakimYap_(sheet, new Date());
   } finally {
     lock.releaseLock();
   }
@@ -490,55 +550,68 @@ function yenidenDenemeKuyruguEkle_(
     return;
   }
 
-  var lock = LockService.getScriptLock();
-  lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
   try {
-    var sheet = getOrCreateQueueSheet_();
-    var simdi = new Date();
-    eskiKayitlariTemizle_(sheet, simdi);
+    var lock = LockService.getScriptLock();
+    lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
+    try {
+      var sheet = getOrCreateQueueSheet_();
+      var simdi = new Date();
+      bakimYap_(sheet, simdi);
 
-    var sonrakiDenemeZamani = new Date(simdi.getTime() + gecikmeDakika * 60 * 1000);
+      var sonrakiDenemeZamani = new Date(simdi.getTime() + gecikmeDakika * 60 * 1000);
 
-    var alanlar = {
-      durum: RETRY_DURUM.BEKLIYOR,
-      denemeAsamasi: ilkAsama,
-      sonrakiDenemeZamani: sonrakiDenemeZamani,
-      ilkHataZamani: simdi,
-      sonDenemeZamani: simdi,
-      sonHataMesaji: hataMesaji,
-      triggerId: triggerId,
-    };
+      var alanlar = {
+        durum: RETRY_DURUM.BEKLIYOR,
+        denemeAsamasi: ilkAsama,
+        sonrakiDenemeZamani: sonrakiDenemeZamani,
+        ilkHataZamani: simdi,
+        sonDenemeZamani: simdi,
+        sonHataMesaji: hataMesaji,
+        triggerId: triggerId,
+      };
 
-    var mevcutSatir = kuyrukSatiriniUpdateIdIleBul_(sheet, updateId);
-    if (mevcutSatir) {
-      satiriGuncelle_(sheet, mevcutSatir, alanlar);
-    } else {
-      logHata_(
-        "yenidenDeneme.kuyruk-satiri-bulunamadi",
-        "update_id=" + updateId + " için kuyrugaEkle_ satırı yok, yeni satır ekleniyor.",
-      );
-      sheet.appendRow([
-        updateId,
-        chatId,
-        text,
-        new Date(mesajTarihiSaniye * 1000),
-        alanlar.durum,
-        alanlar.denemeAsamasi,
-        alanlar.sonrakiDenemeZamani,
-        alanlar.ilkHataZamani,
-        alanlar.sonDenemeZamani,
-        alanlar.sonHataMesaji,
-        alanlar.triggerId,
-        messageId,
-      ]);
+      var mevcutSatir = kuyrukSatiriniUpdateIdIleBul_(sheet, updateId);
+      if (mevcutSatir) {
+        satiriGuncelle_(sheet, mevcutSatir, alanlar);
+      } else {
+        logHata_(
+          "yenidenDeneme.kuyruk-satiri-bulunamadi",
+          "update_id=" + updateId + " için kuyrugaEkle_ satırı yok, yeni satır ekleniyor.",
+        );
+        sheet.appendRow([
+          updateId,
+          chatId,
+          text,
+          new Date(mesajTarihiSaniye * 1000),
+          alanlar.durum,
+          alanlar.denemeAsamasi,
+          alanlar.sonrakiDenemeZamani,
+          alanlar.ilkHataZamani,
+          alanlar.sonDenemeZamani,
+          alanlar.sonHataMesaji,
+          alanlar.triggerId,
+          messageId,
+        ]);
+      }
+      log_("yenidenDeneme.kuyruklandi", {
+        updateId: updateId,
+        triggerId: triggerId,
+        sonrakiDenemeZamani: sonrakiDenemeZamani,
+      });
+    } finally {
+      lock.releaseLock();
     }
-    log_("yenidenDeneme.kuyruklandi", {
-      updateId: updateId,
-      triggerId: triggerId,
-      sonrakiDenemeZamani: sonrakiDenemeZamani,
-    });
-  } finally {
-    lock.releaseLock();
+  } catch (yaziHatasi) {
+    // Trigger BAŞARIYLA kuruldu ama satıra yazılamadı (kilit zaman aşımı,
+    // Sheets hatası vb.) — bu trigger artık hiçbir satırın trigger_id'siyle
+    // eşleşmeyecek, yani sahipsizTetikleyicileriTemizle_ dahi onu asla
+    // "meşru" saymayacak. Bunu kotayı sessizce tüketen bir sahipsiz trigger'a
+    // dönüştürmemek için burada HEMEN geri siliyoruz (compensating delete,
+    // 2026-09-29) — sonra hata olduğu gibi doPost'un kuyruklama-hatası
+    // fallback'ine yükseliyor.
+    logHata_("yenidenDeneme.satir-yazilamadi-trigger-geri-alindi", yaziHatasi);
+    zamanliTetikleyiciSil_(triggerId);
+    throw yaziHatasi;
   }
 }
 
@@ -570,7 +643,7 @@ function pesEdildiKuyruguEkleVeBildir_(
   try {
     sheet = getOrCreateQueueSheet_();
     var simdi = new Date();
-    eskiKayitlariTemizle_(sheet, simdi);
+    bakimYap_(sheet, simdi);
 
     var alanlar = {
       durum: RETRY_DURUM.PES_EDILDI,
@@ -687,7 +760,7 @@ function zamanlanmisTekrarDenemeyiIsle() {
   try {
     sheet = getOrCreateQueueSheet_();
     var simdiClaim = new Date();
-    eskiKayitlariTemizle_(sheet, simdiClaim);
+    bakimYap_(sheet, simdiClaim);
 
     var tumSatirlar = kuyrukTumSatirlariOku_(sheet);
     vadesiGelenler = tumSatirlar
@@ -780,9 +853,10 @@ function zamanlanmisTekrarDenemeyiIsle() {
       }
 
       var yeniAsama = row.denemeAsamasi + 1;
+      var yeniTriggerId;
       try {
         var gecikmeDakika = sonrakiGecikmeDakika_(yeniAsama);
-        var yeniTriggerId = zamanliTetikleyiciKur_(gecikmeDakika);
+        yeniTriggerId = zamanliTetikleyiciKur_(gecikmeDakika);
         var yeniSonrakiZaman = new Date(
           simdi.getTime() + gecikmeDakika * 60 * 1000,
         );
@@ -800,6 +874,13 @@ function zamanlanmisTekrarDenemeyiIsle() {
           gecikmeDakika: gecikmeDakika,
         });
       } catch (triggerErr) {
+        if (yeniTriggerId) {
+          // Trigger BAŞARIYLA kuruldu ama satır güncellenemedi — bu trigger
+          // artık hiçbir satırın trigger_id'siyle eşleşmeyecek (satır PES_EDILDI'ye
+          // düşecek, trigger_id'si boşaltılacak). Sahipsiz kalmasın diye
+          // hemen geri siliyoruz (compensating delete, 2026-09-29).
+          zamanliTetikleyiciSil_(yeniTriggerId);
+        }
         logHata_("yenidenDeneme.trigger-kurulamadi-KRITIK", triggerErr);
         var triggerHataMesaji = "Trigger kurulamadı: " + triggerErr.message;
         satiriPesEdildiOlarakIsaretle_(sheet, row, triggerHataMesaji, simdi);

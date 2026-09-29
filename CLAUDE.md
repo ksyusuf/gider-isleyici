@@ -654,6 +654,77 @@ rehberi" tablosuna eklenen yeni satırlarla kullanıcı tarafından gerçek
 ortamda test edilmeli. **`clasp push` + AYNI deployment ID'ye `clasp deploy
 -i <id>` gerekiyor.**
 
+## Sahipsiz (orphan) trigger temizliği (2026-09-29, ikinci tur)
+
+**Problem:** Kullanıcı prod'da sistemin kurduğu bazı trigger'ları
+temizlemeyi unuttuğunu fark etti (Apps Script projesindeki Triggers
+listesinde birikiyorlardı). Kod incelemesinde İKİ ayrı kök sebep bulundu:
+
+1. **Trigger kuruldu ama hiçbir satıra bağlanamadı.**
+   `yenidenDenemeKuyruguEkle_` ve `zamanlanmisTekrarDenemeyiIsle`'ın aşama-
+   atlama dalı önce `zamanliTetikleyiciKur_` ile trigger kuruyor, SONRA satırı
+   güncelliyor; bu ikinci adım (kilit zaman aşımı, Sheets hatası vb.)
+   başarısız olursa kurulan trigger hiçbir satırın `trigger_id`'sinde
+   görünmüyor — eski temizlik mantığı SADECE satırlardan yola çıktığı için bu
+   sahipsiz trigger'ı asla bulamıyordu.
+2. **Bir satır dıştan (elle) silinirse/değişirse.** O satıra ait trigger
+   ateşlendiğinde `zamanlanmisTekrarDenemeyiIsle` sadece "vadesi gelmiş
+   BEKLIYOR satırları" tarıyordu; satır artık yoksa trigger için HİÇBİR ŞEY
+   yapılmıyordu — trigger listede kalıyordu (Apps Script'in tek seferlik
+   trigger'ları ateşlendikten sonra kendiliğinden silinmiyor) ve bir daha da
+   ateşlenmeyeceği için sonsuza dek "ölü" kalıyordu.
+
+**Uygulanan iki parçalı çözüm:**
+
+1. **Compensating delete (senkron, race'siz) — kök sebep (1)'i baştan
+   önlüyor.** `yenidenDenemeKuyruguEkle_`'nin lock/sheet-yazma bloğu artık bir
+   dış `try/catch`'e alındı; yazma BAŞARISIZ olursa YENİ KURULAN trigger
+   `zamanliTetikleyiciSil_` ile hemen geri silinip hata yeniden fırlatılır
+   (mevcut `doPost > catch (kuyrukHatasi)` akışı değişmeden devreye girer).
+   `zamanlanmisTekrarDenemeyiIsle`'ın escalation dalında da aynı desen:
+   `yeniTriggerId` dış scope'a taşındı, `satiriGuncelle_` hata verirse
+   PES_EDILDI'ye düşmeden ÖNCE o trigger geri silinir.
+2. **Sahipsiz-trigger taraması (sweep) — kök sebep (2)'yi temizliyor.** Yeni
+   `retry/RetryCore.js > sahipsizTetikleyicileriTemizle_(sheet)`:
+   `RETRY_HANDLER_FN_ADI`'na kayıtlı TÜM trigger'ları alır, sadece `BEKLIYOR`
+   satırların referans verdiği `trigger_id`'leri "meşru" sayar, kalanını
+   GERÇEKTEN siler (disable değil). Sadece kendi handler'ımıza ait
+   trigger'lara dokunur. Yeni `bakimYap_(sheet, simdi)` bunu
+   `eskiKayitlariTemizle_` (FIFO) ile birlikte çağırır; eski
+   `eskiKayitlariTemizleKilitli_` → `bakimYapKilitli_` olarak yeniden
+   adlandırılıp içeride `bakimYap_`'ı çağıracak şekilde güncellendi.
+   `Queue.js > kuyrugaEkle_` (HER mesajda) ve `yenidenDenemeKuyruguEkle_` /
+   `pesEdildiKuyruguEkleVeBildir_` / `zamanlanmisTekrarDenemeyiIsle`'daki
+   (zaten kilit altında olan) doğrudan çağrılar `bakimYap_`'a güncellendi —
+   yani sweep hem retry trigger'ı ateşlendiğinde hem her gelen mesajda
+   çalışıyor (kullanıcı kararı: defense-in-depth, mevcut FIFO temizliğiyle
+   aynı desen).
+
+**Kabul edilen kalıntı risk (kullanıcı onayı):** Trigger kurulup satıra
+YAZILMADAN önceki çok kısa pencerede, BAŞKA bir execution (örn. aynı anda
+gelen farklı bir Telegram mesajı) sweep'i tam o anda çalıştırırsa, henüz
+hiçbir satıra bağlanmamış bu yeni trigger'ı "sahipsiz" sanıp silebilir —
+mesaj o zaman BEKLIYOR'da ölü bir `trigger_id` ile kalabilir. Kişisel/düşük
+hacimli kullanım için pratikte ihmal edilebilir (iki execution'ın milisaniye
+hassasiyetinde çakışması gerekir) — kullanıcı basit çözümü seçti, ek önlem
+(kilit sıralamasını değiştirip tam atomik hale getirmek) alınmadı.
+
+**Bu, `RETRY_MAX_SATIR_PER_TETIKLEME` aşımı riskinden FARKLI ve onu
+ÇÖZMÜYOR** (bkz. "Bilinen varsayımlar" bölümündeki 2026-09-29 notu): o
+senaryoda trigger zaten ateşlenip "tükenmiş" ama satır hâlâ o trigger_id'yi
+taşıyor — sweep bunu "meşru" sayıp SİLMEZ (doğru davranış, silinirse satır
+bir daha hiç denenmezdi), ama trigger da bir daha ateşlenmeyeceği için satır
+yine BEKLIYOR'da takılı kalır. Bu ayrı, çözülmemiş bir kenar durum.
+
+**Doğrulama:** `sahipsizTetikleyicileriTemizle_`'in meşru/sahipsiz ayrım
+mantığı scratchpad'te izole bir Node scriptiyle 6/6 PASS doğrulandı (BEKLIYOR
+satırın trigger'ı korunuyor; satır yokken/PES_EDILDI/ISLENIYOR/SILINDI/
+TAMAMLANDI satırların eski trigger_id'leri asla meşru sayılmıyor; başka bir
+handler'a ait trigger'a hiç dokunulmuyor). `node --check` ve fonksiyon
+envanteri diff'i tüm dosyalarda tekrarlandı. Gerçek trigger silme/Sheets
+etkileşimi kullanıcı tarafından gerçek ortamda test edilmeli — bkz. aşağıdaki
+"Az-token doğrulama rehberi"ne eklenen satır.
+
 ## Bilinen varsayımlar / kırılgan noktalar
 
 - `SHEET_LAYOUT` (`START_ROW=3`, `START_COL=4`/D, `NUM_COLS=6`) tamamen
@@ -1026,6 +1097,7 @@ harness'ı kurmaya ÇALIŞILMAMALI, önce bu tablo denenmeli.
 | FIFO temizlik | Sheet'e elle `RETRY_TEMIZLIK_ESIK_MS`'den eski bir tarih + `durum=TAMAMLANDI` satırı ekle, herhangi bir mesaj gönderip `kuyrugaEkle_`'yi tetikle, satırın silindiğini gör |
 | `/pesedilenler`, `/pesdene`, `/komutlar` | Doğrudan Telegram'dan gönder, cevabı oku — listelenen mesaj metinlerinin backtick içinde göründüğünü gözle doğrula |
 | `/sonmesajisil` | Bir test mesajı gönder, hemen ardından `/sonmesajisil` gönder; queue'da o satırın `durum=SILINDI` olduğunu VE (48 saat içindeyse) Telegram'daki mesajın silindiğini doğrula. `BEKLIYOR` bir mesajda denenirse `yenidenDenemeKuyruguDurumu()`'nda `kayitliTriggerSayisi`'nin de düştüğünü kontrol et |
+| Sahipsiz trigger temizliği | Gemini'yi geçici olarak bozup bir mesajın `BEKLIYOR`'a düşmesini sağla (bir trigger kurulur), sonra o satırı Sheets'te ELLE sil; trigger ateşlenene kadar bekle (en kısa aşama ~10dk); `yenidenDenemeKuyruguDurumu()`'ndaki `kayitliTriggerSayisi`'nin 0'a düştüğünü ve Apps Script editörü → Triggers listesinde o trigger'ın artık GÖRÜNMEDİĞİNİ doğrula |
 
 Kod satır numaralarına referans VERİLMEDİ (kod değiştikçe kayar) — yalnızca
 fonksiyon adları, çünkü onlar kararlı.
