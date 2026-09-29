@@ -66,16 +66,25 @@ function groqIstekGonder_(profil, systemMetni, userText) {
 function groqIstekGonderHam_(profil, systemMetni, userText, toolsDahil) {
   var requestBody = {
     model: profil.model,
+    // Çıkarım işi: deterministik çıktı (tool adı/firma yazımı varyansını azaltır).
+    temperature: 0,
     messages: [
       { role: "system", content: systemMetni },
       { role: "user", content: userText },
     ],
   };
+  // Opsiyonel (yalnızca reasoning destekleyen modeller — örn. gpt-oss): "low"|"medium"|"high".
+  // Tanımsızsa hiç gönderilmez, diğer modeller bozulmasın.
+  if (profil.reasoningEffort) {
+    requestBody.reasoning_effort = profil.reasoningEffort;
+  }
   if (toolsDahil) {
     requestBody.tools = TOOLS.map(function (t) {
       return { type: "function", function: groqKucukTip_(t) };
     });
     requestBody.tool_choice = "auto";
+    // Çoklu harcama: aynı yanıtta birden fazla tool çağrısına açıkça izin ver.
+    requestBody.parallel_tool_calls = true;
   }
 
   var t0 = Date.now();
@@ -91,7 +100,13 @@ function groqIstekGonderHam_(profil, systemMetni, userText, toolsDahil) {
     http: response.getResponseCode(),
     sureMs: Date.now() - t0,
     govde: response.getContentText(),
+    usage: null,
   };
+  if (sonuc.http === 200) {
+    try {
+      sonuc.usage = JSON.parse(sonuc.govde).usage || null; // prompt_tokens / completion_tokens
+    } catch (e) {}
+  }
   log_("llm.yanit", sonuc);
   return sonuc;
 }

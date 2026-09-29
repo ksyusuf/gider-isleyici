@@ -45,23 +45,31 @@ function llmTestIstegi_(userText) {
     http: ham.http,
     sureMs: ham.sureMs,
     govde: ham.govde,
+    usage: ham.usage,
     parts: parts,
     normalizeHata: normalizeHata,
   };
 }
 
 /**
- * Örnek harcama mesajını gönderip sonucu okunaklı bir blok olarak Logger'a yazar.
+ * Verilen mesajı (varsayılan: LLM_TEST_MESAJI) gönderip sonucu okunaklı bir blok
+ * olarak Logger'a yazar. Aşağıdaki llmTest_* fonksiyonları bunu sabit örneklerle
+ * çağırır — editörden her harcama tipini AYRI AYRI çalıştırmak için.
  */
-function llmTest() {
-  var r = llmTestIstegi_(LLM_TEST_MESAJI);
+function llmTest(mesaj) {
+  mesaj = mesaj || LLM_TEST_MESAJI;
+  var r = llmTestIstegi_(mesaj);
   var satirlar = [
     "",
     "════════ LLM TESTİ ════════",
     "Sağlayıcı: " + CONFIG.llm.test.provider,
     "Model    : " + CONFIG.llm.test.model,
-    "Mesaj    : " + LLM_TEST_MESAJI,
+    "Mesaj    : " + mesaj,
     "Sonuç    : HTTP " + r.http + " (" + r.sureMs + " ms)",
+    "Token    : " +
+      (r.usage
+        ? "girdi " + r.usage.prompt_tokens + ", çıktı " + r.usage.completion_tokens
+        : "-"),
     "",
   ];
 
@@ -121,4 +129,66 @@ function llmModelleriListele() {
   }
   var idler = saglayici.modelleriListele(profil);
   Logger.log("%s model:\n%s", idler.length, idler.join("\n"));
+}
+
+// ============================================================================
+// Harcama tipi başına tek-istek test fonksiyonları (editörden birer birer çalıştır)
+// ============================================================================
+// Her biri tek bir API isteği atar (429'a takılmamak için ard arda değil, aralıklı
+// çalıştır). Amaç: farklı harcama tiplerinde modelin döndürdüğü yanıt biçimini/
+// tutarlılığını görmek. Yan etkisi yok (fonksiyon çalıştırılmaz).
+
+/** Tek harcama, firma eki + göreceli tarih. */
+function llmTest_tek() {
+  llmTest("dün teknosadan telefon aldım 50000 tl");
+}
+
+/** ÇOKLU harcama: iki bağımsız kalem → tek add_expenses çağrısında 2 elemanlı liste beklenir. */
+function llmTest_coklu() {
+  llmTest("markette 200 tl alışveriş yaptım, otobüse 15 lira verdim");
+}
+
+/** ÇOKLU harcama, üç kalem ve farklı tarihler. */
+function llmTest_coklu3() {
+  llmTest("dün kafede 120 tl kahve içtim, bugün taksiye 250 tl verdim, akşam da eczaneden 90 tl vitamin aldım");
+}
+
+/** Taksitli, taksit başı tutar net. */
+function llmTest_taksit() {
+  llmTest("iphone'u 6 taksitle aldım, taksit başı 5000 tl");
+}
+
+/** Taksitli, toplam mı taksit başı mı belirsiz → çağrı yok, Türkçe soru beklenir. */
+function llmTest_taksitBelirsiz() {
+  llmTest("5 taksitle ayakkabı aldım 5000 tl");
+}
+
+/** Belirsiz tutar → çağrı yok, Türkçe soru beklenir. */
+function llmTest_belirsizTutar() {
+  llmTest("bugün biraz para harcadım");
+}
+
+/** Kısmi: bir kalem net, biri belirsiz → 1 çağrı + Türkçe soru beklenir. */
+function llmTest_kismi() {
+  llmTest("dün 150 tl bir şeye harcadım, bugün de 40 tl otobüs");
+}
+
+/** Kategori sınırı: atıştırmalık (Yemek). */
+function llmTest_kategoriYemek() {
+  llmTest("spor sonrası atıştırmalık aldım 105tl");
+}
+
+/** Kategori sınırı: dijital abonelik. */
+function llmTest_kategoriDijital() {
+  llmTest("netflix aboneliğim yenilendi 229 tl");
+}
+
+/** Selamlaşma → çağrı yok, kısa Türkçe metin beklenir. */
+function llmTest_selam() {
+  llmTest("merhaba");
+}
+
+/** Serbest deneme: aşağıdaki mesajı istediğin gibi değiştirip çalıştır. */
+function llmTest_ozel() {
+  llmTest("BURAYA_KENDI_MESAJINI_YAZ");
 }

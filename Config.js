@@ -17,7 +17,8 @@
 
 /**
  * Bir LLM profilini Script Properties'ten okur. Öneke göre:
- * <ONEK>_PROVIDER (varsayılan "groq"), <ONEK>_API_KEY, <ONEK>_MODEL.
+ * <ONEK>_PROVIDER (varsayılan "groq"), <ONEK>_API_KEY, <ONEK>_MODEL,
+ * <ONEK>_REASONING_EFFORT (opsiyonel).
  * Model adı kodda sabit DEĞİL — değiştirmek için redeploy gerekmez.
  * @param {string} onek "LLM_PROD" | "LLM_TEST"
  * @return {{provider:string, apiKey:?string, model:?string}}
@@ -28,6 +29,8 @@ function llmProfilOku_(onek) {
     provider: p.getProperty(onek + "_PROVIDER") || "groq",
     apiKey: p.getProperty(onek + "_API_KEY"),
     model: p.getProperty(onek + "_MODEL"),
+    // Opsiyonel: reasoning_effort ("low"|"medium"|"high"). Doğruluk öncelikli olduğundan prod/test için "medium" önerilir; boşsa gönderilmez (modelin varsayılanı).
+    reasoningEffort: p.getProperty(onek + "_REASONING_EFFORT") || null,
   };
 }
 
@@ -99,129 +102,122 @@ const KATEGORILER = [
     ad: "Ev",
     anahtar: "EV",
     kapsar:
-      "Ev eşyası, mobilya, ev tadilat/bakım harcamaları ve market/gıda " +
-      'alışverişi (market alışverişinde malzeme alanına "Market" yazılır).',
+      "Household goods, furniture, home repair/maintenance, and supermarket/grocery " +
+      'shopping (for supermarket shopping set item to "Market").',
     kapsamaz:
-      "Dışarıdayken veya bir aktivite sırasında/sonrasında anlık tüketim " +
-      "amacıyla alınan atıştırmalık/içecek (bkz. Yemek).",
+      "Snacks/drinks bought for immediate consumption while out or during/after an " +
+      "activity (see Yemek).",
   },
   {
     ad: "Yemek",
     anahtar: "YEMEK",
     kapsar:
-      "Dışarıda yenilen veya sipariş edilen yemekler. Dışarıdayken/bir " +
-      "aktivite sırasında veya sonrasında anlık tüketim amacıyla alınan " +
-      "atıştırmalık/içecek de buraya girer.",
+      "Meals eaten out or ordered in. Also snacks/drinks bought for immediate " +
+      "consumption while out or during/after an activity.",
     kapsamaz:
-      "Kafede yenilen/içilen her şey; mekan kafeyse ürün ne olursa olsun " +
-      "kategori Cafe'dir. Markette toplu/stoklamak amacıyla alınan gıda " +
-      "(bkz. Ev).",
+      "Anything eaten/drunk at a cafe: if the venue is a cafe, the category is Cafe " +
+      "whatever the product. Groceries bought in bulk/to stock up at a supermarket (see Ev).",
   },
   {
     ad: "Cafe",
     anahtar: "CAFE",
     kapsar:
-      "Sohbet/vakit geçirme amaçlı kafe harcamaları; mekan kafeyse ürün ne " +
-      "olursa olsun (kahve, tost, tatlı) buraya girer.",
+      "Cafe spending for chatting/hanging out; if the venue is a cafe, it belongs " +
+      'here whatever the product (coffee, "tost", dessert).',
   },
   {
     ad: "Spor",
     anahtar: "SPOR",
     kapsar:
-      "Sportif faaliyetlerin tümü: salon üyeliği, ders ücreti, spor " +
-      "ekipmanı/malzemesi.",
-    kapsamaz: "Spor kıyafeti/ayakkabısı (bkz. Giyim).",
+      "All sports activities: gym membership, lesson fees, sports equipment/gear.",
+    kapsamaz: "Sports clothing/shoes (see Giyim).",
   },
   {
     ad: "Elektronik",
     anahtar: "ELEKTRONIK",
     kapsar:
-      "Fiziksel elektronik cihaz/ürün satın alımları (telefon, kulaklık, " +
-      "şarj aleti vb.).",
-    kapsamaz: "Yazılım/uygulama/dijital hizmet (bkz. Dijital).",
+      "Physical electronic devices/products (phone, headphones, charger, etc.).",
+    kapsamaz: "Software/apps/digital services (see Dijital).",
   },
   {
     ad: "Araç",
     anahtar: "ARAC",
     kapsar:
-      "Kullanıcının kendi aracının bakım ve giderleri: yakıt, bakım, " +
-      "tamir, sigorta, muayene, kendi aracıyla otopark.",
+      "Costs of the user's OWN vehicle: fuel, maintenance, repair, insurance, " +
+      'inspection ("muayene"), parking with own vehicle.',
     kapsamaz:
-      "Araç kiralama (bkz. Kiralama), kendi aracı dışındaki ulaşım " +
-      "(bkz. Ulaşım).",
+      "Vehicle rental (see Kiralama), transport other than own vehicle (see Ulaşım).",
   },
   {
     ad: "Kişisel",
     anahtar: "KISISEL",
-    kapsar:
-      "Kişisel bakım/kozmetik harcamaları ve kırtasiye/küçük ofis-ev " +
-      "malzemesi.",
+    kapsar: "Personal care/cosmetics and stationery/small office-home supplies.",
   },
   {
     ad: "Destek",
     anahtar: "DESTEK",
     kapsar:
-      "Karşılıksız verilen paralar: düğün/davet takı-nakit hediyeleri, " +
-      "sadaka, zekat, karşılıksız (faizsiz) verilen borçlar.",
-    kapsamaz: "Somut hediye eşyası (bkz. Hediye).",
+      'Money given with nothing expected back: wedding/invitation cash or gold gifts ("takı"), ' +
+      'charity ("sadaka"), "zekat", interest-free loans given to others.',
+    kapsamaz: "Concrete gift items (see Hediye).",
   },
   {
     ad: "Giyim",
     anahtar: "GIYIM",
-    kapsar: "Giyim eşyası (spor kıyafeti/ayakkabısı dahil).",
+    kapsar: "Clothing items (including sports clothing/shoes).",
   },
   {
     ad: "Eğlence",
     anahtar: "EGLENCE",
-    kapsar: "Sinema, konser, oyun bileti gibi organize eğlence etkinlikleri.",
-    kapsamaz: "Kafede sohbet/vakit geçirme (bkz. Cafe).",
+    kapsar: "Organized entertainment: cinema, concert, game tickets.",
+    kapsamaz: "Chatting/hanging out at a cafe (see Cafe).",
   },
   {
     ad: "Ulaşım",
     anahtar: "ULASIM",
     kapsar:
-      "Kendi aracı dışındaki ulaşım: otobüs, metro, akbil/abonman, " +
-      "taksi/uber, uçak/tren bileti.",
+      'Transport other than own vehicle: bus, metro, "akbil"/pass, taxi/Uber, ' +
+      "plane/train tickets.",
   },
   {
     ad: "Hastane",
     anahtar: "HASTANE",
-    kapsar: "Sağlık/tıbbi harcamalar: doktor, eczane/ilaç/vitamin, tedavi.",
-    kapsamaz: "Kozmetik/bakım ürünü (bkz. Kişisel).",
+    kapsar:
+      'Health/medical costs: doctor, pharmacy ("eczane")/medicine/vitamins, treatment.',
+    kapsamaz: "Cosmetic/care products (see Kişisel).",
   },
   {
     ad: "Hediye",
     anahtar: "HEDIYE",
-    kapsar: "Somut hediye eşyaları.",
-    kapsamaz: "Nakit/altın karşılıksız yardım (bkz. Destek).",
+    kapsar: "Concrete gift items.",
+    kapsamaz: "Cash/gold given with nothing expected back (see Destek).",
   },
   {
     ad: "Eğitim",
     anahtar: "EGITIM",
-    kapsar: "Eğitim, kurs, ders kitabı vb. harcamalar.",
+    kapsar: "Education, courses, textbooks, etc.",
   },
   {
     ad: "Kiralama",
     anahtar: "KIRALAMA",
-    kapsar: "Araç, ev veya başka bir şeyin kiralanması (ev kirası dahil).",
+    kapsar: "Renting a vehicle, home, or anything else (including house rent).",
   },
   {
     ad: "Fatura",
     anahtar: "FATURA",
     kapsar:
-      "Elektrik, su, doğalgaz, internet, telefon hattı gibi altyapı/hat " +
-      "sağlayıcısına yapılan zorunlu düzenli ödemeler.",
-    kapsamaz: "İçerik/yazılım platformu abonelikleri (bkz. Dijital).",
+      "Mandatory recurring payments to infrastructure/line providers: electricity, " +
+      "water, natural gas, internet, phone line.",
+    kapsamaz: "Content/software platform subscriptions (see Dijital).",
   },
   {
     ad: "Dijital",
     anahtar: "DIJITAL",
     kapsar:
-      "Netflix, Spotify, bulut depolama, yazılım/uygulama abonelikleri, " +
-      "dijital oyun/uygulama satın alımı (tek seferlik dahil).",
+      "Netflix, Spotify, cloud storage, software/app subscriptions, digital " +
+      "game/app purchases (including one-off).",
     kapsamaz:
-      "Fiziksel cihaz satın alımı (bkz. Elektronik), altyapı/hat faturası " +
-      "(bkz. Fatura).",
+      "Physical device purchases (see Elektronik), infrastructure/line bills (see Fatura).",
   },
 ];
 
@@ -230,169 +226,147 @@ const KATEGORILER = [
 // ============================================================================
 
 /**
- * LLM'e her istekte gönderilen fonksiyon şemaları. Her parametrenin
- * description'ı, Main.js'teki systemInstruction'daki kurallarla kasıtlı
- * olarak örtüşür (çift katman: tek başına systemInstruction'a güvenilmez).
+ * LLM'e her istekte gönderilen fonksiyon şemaları. Tool/parametre adları ve
+ * description'lar İNGİLİZCE (Türkçe bitişik adlar modelde bozuluyordu, bkz.
+ * CLAUDE.md); `category` enum değerleri TÜRKÇE (sheet'e literal yazılır). Kurallar
+ * systemInstruction'da (LLM.js) TEK yerde tutulur — burada yalnızca kısa alan
+ * anlamı + şema zorlaması (enum/required) var. Türkçe iç adlara çeviri:
+ * LLM.js > FUNCTION_MAP.
  */
 const TOOLS = [
   {
-    name: "harcamaEkle",
+    name: "add_expenses",
     description:
-      "Kullanıcının doğal dilde belirttiği TEK bir harcama kalemini tabloya ekler. " +
-      "Sadece tutar, tarih ve tür/kategori kesin ve tartışmasız biçimde belirlenebiliyorsa " +
-      "çağır; aksi halde bu kalem için ÇAĞIRMA ve belirsizliği metin yanıtında açıkla.",
+      "Record one or more expense items in a SINGLE call: put EVERY expense of the " +
+      "message in the `expenses` array, one element per item (a single expense = a " +
+      "one-element array). Include only items whose amount, date and category are " +
+      "unambiguous; for the others do not add an element and ask the user (in Turkish).",
     parameters: {
       type: "OBJECT",
       properties: {
-        tutar: {
+        expenses: {
+          type: "ARRAY",
+          description: "One element per expense item, in the order they appear.",
+          items: {
+            type: "OBJECT",
+            properties: {
+              amount: {
+                type: "NUMBER",
+                description: "Amount in TL as a plain number (e.g. 150).",
+              },
+              category: {
+                type: "STRING",
+                enum: KATEGORILER.map(function (k) {
+                  return k.ad;
+                }),
+                description: "Exactly one of the listed Turkish category names.",
+              },
+              date: {
+                type: "STRING",
+                description:
+                  "Absolute date YYYY-MM-DD, resolved against the message time. " +
+                  "Omit only if the user gave no date (today is then used).",
+              },
+              merchant: {
+                type: "STRING",
+                description:
+                  "Optional. Specific business name, Turkish suffixes removed.",
+              },
+              item: {
+                type: "STRING",
+                description: "Optional. Concrete product/item bought.",
+              },
+              note: {
+                type: "STRING",
+                description:
+                  "Optional. Relevant extra info that fits no other field. Omit if none.",
+              },
+            },
+            required: ["amount", "category"],
+          },
+        },
+      },
+      required: ["expenses"],
+    },
+  },
+  {
+    name: "add_installment_expense",
+    description:
+      "Add ONE purchase paid in installments; the code splits it into rows, do NOT " +
+      "compute dates or amounts yourself. Call only when amount, amount_type, " +
+      "installment_count and category are unambiguous; otherwise ask the user (in Turkish).",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        amount: {
           type: "NUMBER",
           description:
-            "Harcamanın TL cinsinden tutarı. Açık ve sayısal olmalı (örn. 150). " +
-            "'birkaç lira', 'epey para' gibi belirsiz ifadelerde bu alanı DOLDURMA " +
-            "ve fonksiyonu çağırma.",
+            "Amount in TL as stated by the user; its meaning is given by amount_type.",
         },
-        kategori: {
+        amount_type: {
+          type: "STRING",
+          enum: ["TOTAL", "PER_INSTALLMENT"],
+          description:
+            "TOTAL if amount is the whole price, PER_INSTALLMENT if it is one installment.",
+        },
+        installment_count: {
+          type: "NUMBER",
+          description: "Number of installments, at least 2.",
+        },
+        category: {
           type: "STRING",
           enum: KATEGORILER.map(function (k) {
             return k.ad;
           }),
-          description:
-            "Harcamanın kategorisi. KATEGORILER listesinden (enum) BİREBİR birini " +
-            "seç; listede olmayan ya da benzetilmiş yeni bir kategori ASLA üretme. " +
-            "Kategori tanımları ve ayrım kuralları systemInstruction'da verilmiştir; " +
-            "hangi kategoriye karşılık geldiği net değilse bu alanı doldurma ve " +
-            "fonksiyonu çağırma.",
+          description: "Exactly one of the listed Turkish category names.",
         },
-        aciklama: {
+        first_date: {
           type: "STRING",
           description:
-            "tutar/kategori/tarih/firma/malzeme alanlarının hiçbirine tam oturmayan ama " +
-            "harcamayla ilgili ek bilgi: kiminle/kimin için yapıldığı, sebep, not vb. Opsiyonel.",
+            "Date of the first installment, absolute YYYY-MM-DD, resolved like the expenses[].date field.",
         },
-        tarih: {
+        merchant: {
           type: "STRING",
-          description:
-            "Harcamanın tarihi, YYYY-MM-DD formatında MUTLAK tarih (asla 'dün' gibi göreceli " +
-            "metin gönderme). systemInstruction'daki ZAMAN BAĞLAMI kurallarına göre, mesajın " +
-            "gönderildiği tarihe göre hesapla. Kullanıcı hiç tarih belirtmediyse mesajın " +
-            "gönderildiği günü (bugün) kullan — bu belirsizlik sayılmaz. Hangi güne karşılık " +
-            "geldiği gerçekten belirsizse bu alanı doldurma ve fonksiyonu çağırma.",
+          description: "Optional. Business/place name, Turkish suffixes removed.",
         },
-        firma: {
+        item: {
           type: "STRING",
-          description:
-            "Harcamanın yapıldığı firma/işletme/yer adı (varsa, örn. 'Migros', 'Starbucks'). Opsiyonel.",
+          description: "Optional. Concrete product/item bought.",
         },
-        malzeme: {
+        note: {
           type: "STRING",
-          description:
-            "Satın alınan somut ürün/malzeme adı (varsa, örn. 'Ekmek', 'Bilet'). Opsiyonel.",
+          description: "Optional. Extra info. Omit if none.",
         },
       },
-      required: ["tutar", "kategori"],
+      required: ["amount", "amount_type", "installment_count", "category"],
     },
   },
   {
-    name: "taksitliHarcamaEkle",
-    description:
-      "Kullanıcının taksitli olarak yaptığı TEK bir harcamayı otomatik olarak " +
-      "taksitSayisi kadar ayrı satıra böler (her biri ilgili ayın aynı gününde, " +
-      "açıklamasında 'k/N' etiketiyle). Taksit tarihi/tutarı hesaplaması KODDA " +
-      "yapılır, sen sadece alanları eksiksiz çıkarırsın. tutar, tutarTipi, " +
-      "taksitSayisi ve kategori kesin ve tartışmasız biçimde belirlenebiliyorsa " +
-      "çağır; aksi halde ÇAĞIRMA ve belirsizliği metin yanıtında açıkla.",
+    name: "get_recent_expenses",
+    description: "List the most recently added expenses.",
     parameters: {
       type: "OBJECT",
       properties: {
-        tutar: {
+        count: {
           type: "NUMBER",
-          description:
-            "Kullanıcının belirttiği tutar — tutarTipi'ne göre TOPLAM tutar ya " +
-            "da TEK bir taksidin tutarı olabilir (ikisi karıştırılmamalı, bkz. " +
-            "tutarTipi).",
-        },
-        tutarTipi: {
-          type: "STRING",
-          enum: ["TOPLAM", "TAKSIT_BASI"],
-          description:
-            "Yukarıdaki tutar alanının anlamı. 'toplamda/toplam X TL'ye', " +
-            "'X TL'yi N taksitte' gibi ifadeler TOPLAM'a; 'ayda/taksit başına " +
-            "X TL', 'her ay X TL ödeyeceğim' gibi ifadeler TAKSIT_BASI'na " +
-            "işaret eder. Metinden hangisi olduğu net çıkarılamıyorsa bu alanı " +
-            "doldurma ve fonksiyonu çağırma — kullanıcıya toplam mı taksit " +
-            "başı mı olduğunu sor.",
-        },
-        taksitSayisi: {
-          type: "NUMBER",
-          description: "Taksit sayısı (N). En az 2 olmalı.",
-        },
-        kategori: {
-          type: "STRING",
-          enum: KATEGORILER.map(function (k) {
-            return k.ad;
-          }),
-          description:
-            "Harcamanın kategorisi — harcamaEkle'deki kategori alanıyla " +
-            "BİREBİR aynı kurallar geçerlidir (KATEGORILER listesinden birebir " +
-            "seç).",
-        },
-        ilkTarih: {
-          type: "STRING",
-          description:
-            "İlk taksidin tarihi, YYYY-MM-DD formatında MUTLAK tarih. " +
-            "harcamaEkle'deki tarih alanıyla AYNI ZAMAN BAĞLAMI kurallarıyla " +
-            "hesapla; kullanıcı tarih belirtmediyse mesajın gönderildiği günü " +
-            "kullan.",
-        },
-        firma: {
-          type: "STRING",
-          description:
-            "Harcamanın yapıldığı firma/işletme/yer adı (varsa). Opsiyonel.",
-        },
-        malzeme: {
-          type: "STRING",
-          description:
-            "Satın alınan somut ürün/malzeme adı (varsa). Opsiyonel.",
-        },
-        aciklama: {
-          type: "STRING",
-          description:
-            "Ek bilgi (opsiyonel). Her satırın açıklamasına otomatik eklenen " +
-            "'(k/N)' etiketinden ÖNCE, ham haliyle verilir.",
-        },
-      },
-      required: ["tutar", "tutarTipi", "taksitSayisi", "kategori"],
-    },
-  },
-  {
-    name: "sonHarcamalariGetir",
-    description:
-      "En son eklenen harcamaları listeler (tablo tarihe göre azalan sıralı olduğundan " +
-      "'son eklenenler' tablonun en üstündeki satırlardır).",
-    parameters: {
-      type: "OBJECT",
-      properties: {
-        adet: {
-          type: "NUMBER",
-          description:
-            "Listelenecek harcama sayısı. Belirtilmezse 5 kullanılır.",
+          description: "How many to list. Optional, default 5.",
         },
       },
       required: [],
     },
   },
   {
-    name: "sonHarcamalariTopla",
-    description: "En son eklenen N adet harcamanın toplam tutarını hesaplar.",
+    name: "sum_recent_expenses",
+    description: "Sum the amounts of the N most recently added expenses.",
     parameters: {
       type: "OBJECT",
       properties: {
-        adet: {
+        count: {
           type: "NUMBER",
-          description: "Toplanacak son harcama sayısı.",
+          description: "How many recent expenses to sum.",
         },
       },
-      required: ["adet"],
+      required: ["count"],
     },
   },
 ];
