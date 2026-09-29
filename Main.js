@@ -4,19 +4,19 @@
  * ============================================================================
  * Telegram webhook'unun bağlandığı `doPost` giriş noktası, `update_id` bazlı
  * tekrar-teslim koruması (isYeniUpdate_) ve deploy sonrası elle çalıştırılan
- * webhook kurulum/durum/kaldırma yardımcıları burada tutulur. Gemini API
- * çağrısı + Katman 1 tekrar deneme `Gemini.js`'te, Telegram gönderim + komut
+ * webhook kurulum/durum/kaldırma yardımcıları burada tutulur. LLM API
+ * çağrısı + Katman 1 tekrar deneme `LLM.js`'te, Telegram gönderim + komut
  * işleme `Telegram.js`'te, Katman 2 (saatlik tekrar deneme) `retry/`
  * dizininde yaşar — bu dosya sadece bunları orkestre eden webhook girişidir.
  *
  * İlgili diğer dosyalar:
- *   - Config.js: CONFIG, SHEET_LAYOUT, TOOLS (Gemini function declarations)
+ *   - Config.js: CONFIG, SHEET_LAYOUT, TOOLS (LLM function declarations)
  *   - Logging.js: log_ / logHata_
- *   - Gemini.js: mesajiIsleVeYanitla_ / hataGeciciMi_ / GEMINI_YOGUN_KULLANICI_MESAJI
+ *   - LLM.js: mesajiIsleVeYanitla_ / hataGeciciMi_ / LLM_YOGUN_KULLANICI_MESAJI
  *   - Telegram.js: sendTelegramMessage_ / islemKomut_
  *   - Expenses.js: Sheets erişim yardımcıları + harcamaEkle / sonHarcamalariGetir / sonHarcamalariTopla
  *   - Queue.js: Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (kuyrugaEkle_)
- *   - retry/RetryCore.js: Gemini geçici/kalıcı hatalarında Katman 2 — mesaj bazlı, tek
+ *   - retry/RetryCore.js: LLM geçici/kalıcı hatalarında Katman 2 — mesaj bazlı, tek
  *     seferlik trigger'larla saatlik tekrar deneme (1-1-2-2-4 saat), pes
  *     etme + toplu bildirim, FIFO temizlik
  *   - retry/RetryCommands.js: `/pesedilenler` ve `/pesdene` komutlarının backend'i
@@ -32,7 +32,7 @@ const UPDATE_LOCK_TIMEOUT_MS = 10000;
  * Bu update daha önce işlendi mi? `respondOk_()` düzeltmesinden sonra Telegram
  * teslimatı başarılı saydığı için normal şartlarda hiç tekrar gelmemeli; bu
  * fonksiyon bir SAVUNMA KATMANI olarak duruyor (ağ kesintisi, gerçek timeout,
- * elle yeniden gönderim). Korunmazsa her tekrarda Gemini yeniden çağrılır, aynı
+ * elle yeniden gönderim). Korunmazsa her tekrarda LLM yeniden çağrılır, aynı
  * harcama tabloya birden fazla kez yazılır ve aynı cevap defalarca gider.
  *
  * Anahtar, update'in içeriği değil Telegram'ın her update'e verdiği artan ve
@@ -57,7 +57,7 @@ const UPDATE_LOCK_TIMEOUT_MS = 10000;
  *   - İşaret işin BAŞINDA atılır, sonunda değil. Tekrar teslim, ilk execution hâlâ
  *     çalışırken gelebiliyor; sonda işaretlense ikisi de işi yapardı.
  *   - Kilit yalnızca "oku + karşılaştır + yaz" kritik bölümünü sarar
- *     (milisaniyeler), Gemini çağrısını DEĞİL — aksi halde tüm istekler seri
+ *     (milisaniyeler), LLM çağrısını DEĞİL — aksi halde tüm istekler seri
  *     hale gelirdi.
  *
  * @param {number|undefined} updateId Telegram update.update_id
@@ -175,14 +175,14 @@ function doPost(e) {
     // zaten eliyor; burada hiçbir sınıflandırma yapılmaz.
     kuyrugaEkle_(update.update_id, chatId, text, message.date, message.message_id);
 
-    // `/` ile başlayan komutlar Gemini'ye hiç gitmeden burada, deterministik
+    // `/` ile başlayan komutlar LLM'e hiç gitmeden burada, deterministik
     // olarak işlenir (bkz. Telegram.js > islemKomut_ ve apps-script/CLAUDE.md madde 2).
     if (text.trim().charAt(0) === "/") {
       var komutCevabi = islemKomut_(text, chatId, update.update_id);
       log_("doPost.komut-cevap", komutCevabi);
       // "Markdown" ile gönderilir: komut çıktıları tamamen bizim
       // şablonlarımız + telegramAlinti_ ile backtick'lenmiş kullanıcı
-      // metinlerinden oluşur (Gemini'nin serbest metnini İÇERMEZ), bu
+      // metinlerinden oluşur (LLM'in serbest metnini İÇERMEZ), bu
       // yüzden dengesiz özel karakter riski düşük (bkz. sendTelegramMessage_
       // fallback'i, yine de bir güvenlik ağı sağlıyor).
       sendTelegramMessage_(chatId, komutCevabi, "Markdown");
@@ -195,7 +195,7 @@ function doPost(e) {
       cevapMetni = mesajiIsleVeYanitla_(text, message.date);
     } catch (mesajHatasi) {
       if (mesajHatasi.gecici) {
-        // Katman 1'in GEMINI_MAX_DENEME denemesi de geçici bir hatayla
+        // Katman 1'in LLM_MAX_DENEME denemesi de geçici bir hatayla
         // tükendi — mesaj Katman 2'ye (retry/RetryCore.js, saatlik tekrar
         // deneme) devredilir; kullanıcıya generic hata YERİNE dostça bir
         // bilgi gider.
@@ -208,7 +208,7 @@ function doPost(e) {
             kullaniciyaGosterilecekHataMetni_(mesajHatasi),
             message.message_id,
           );
-          sendTelegramMessage_(chatId, GEMINI_YOGUN_KULLANICI_MESAJI);
+          sendTelegramMessage_(chatId, LLM_YOGUN_KULLANICI_MESAJI);
           log_("doPost.tamamlandi", {
             toplamSureMs: Date.now() - baslangic,
             sonuc: "kuyruklandi",
@@ -219,7 +219,7 @@ function doPost(e) {
           // kendi başına PES_EDILDI'ye düşüyor (bkz. retry/RetryCore.js) —
           // buraya SADECE beklenmeyen başka bir hata (örn. kilit zaman
           // aşımı, Sheets erişim hatası) düşerse gelinir. Kullanıcıya
-          // ORİJİNAL Gemini hatası YERİNE gerçek sebep gösterilir — aksi
+          // ORİJİNAL LLM hatası YERİNE gerçek sebep gösterilir — aksi
           // halde asıl arıza (kuyruklama hatası) Stackdriver'a gömülüp
           // görünmez kalırdı (bkz. CLAUDE.md "Logları göremiyorum" notu).
           logHata_("doPost.kuyruklama-basarisiz-KRITIK", kuyrukHatasi);

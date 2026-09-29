@@ -2,14 +2,14 @@
  * ============================================================================
  * Gider İşleyici — Telegram Gönderim + Komut Katmanı
  * ============================================================================
- * Telegram Bot API'ye mesaj gönderimi, `/` ile başlayan komutların Gemini'ye
- * hiç gitmeden deterministik işlenmesi, ve Gemini'den dönen parts dizisinin
+ * Telegram Bot API'ye mesaj gönderimi, `/` ile başlayan komutların LLM'e
+ * hiç gitmeden deterministik işlenmesi, ve LLM'den dönen parts dizisinin
  * tek bir Telegram cevap metnine birleştirilmesi burada tutulur.
  *
  * İlgili diğer dosyalar:
  *   - Config.js: CONFIG (telegramToken)
  *   - Logging.js: log_ / logHata_
- *   - Gemini.js: calistirFonksiyon_ (islemSonuclariniBirlestir_ tarafından çağrılır)
+ *   - LLM.js: calistirFonksiyon_ (islemSonuclariniBirlestir_ tarafından çağrılır)
  *   - Expenses.js: sonHarcamalariGetir / sonHarcamalariTopla / normalizeAdet_ (islemKomut_ tarafından çağrılır)
  *   - retry/RetryCommands.js: pesEdilenleriListele_ / pesEdilenleriTekrarDene_ / sonMesajiSil_ (islemKomut_ tarafından çağrılır)
  *   - Main.js: doPost (bu dosyadaki sendTelegramMessage_/islemKomut_/islemSonuclariniBirlestir_'i kullanır)
@@ -126,13 +126,13 @@ const KOMUT_LISTESI_METNI = [
 ].join("\n");
 
 /**
- * `/` ile başlayan komutları Gemini'ye HİÇ göndermeden doğrudan işler —
- * sıfır Gemini API maliyeti/gecikmesi, tamamen deterministik (bkz.
+ * `/` ile başlayan komutları LLM'e HİÇ göndermeden doğrudan işler —
+ * sıfır LLM API maliyeti/gecikmesi, tamamen deterministik (bkz.
  * apps-script/CLAUDE.md madde 2). Tanınmayan komutlar bir hata mesajı +
  * komut listesiyle karşılanır.
  *
- * İSTİSNA: `/pesdene` (retry/RetryCommands.js) bu "Gemini'ye hiç gitmez"
- * prensibinin dışındadır — pes edilmiş mesajları topluca yeniden Gemini'ye
+ * İSTİSNA: `/pesdene` (retry/RetryCommands.js) bu "LLM'e hiç gitmez"
+ * prensibinin dışındadır — pes edilmiş mesajları topluca yeniden LLM'e
  * göndererek tekrar dener (kullanıcının açık isteğiyle, manuel bir işlemdir).
  * @param {string} text Kullanıcının `/` ile başlayan tam mesajı.
  * @param {number|string} chatId `/sonmesajisil` için gerekli.
@@ -172,7 +172,7 @@ function islemKomut_(text, chatId, updateId) {
 }
 
 /**
- * Gemini'den dönen parts dizisini (birden fazla functionCall + opsiyonel bir
+ * LLM'den dönen parts dizisini (birden fazla functionCall + opsiyonel bir
  * text part aynı anda bulunabilir) tek bir Telegram mesajına birleştirir.
  * @param {Array<Object>} parts
  * @return {string}
@@ -195,7 +195,7 @@ function islemSonuclariniBirlestir_(parts) {
   });
 
   if (fonksiyonSonuclari.length === 0) {
-    // Hiç fonksiyon çağrısı yok: Gemini'nin metni bir selamlaşma, genel bir
+    // Hiç fonksiyon çağrısı yok: LLM'in metni bir selamlaşma, genel bir
     // soru ya da netleştirme talebi olabilir — hepsi geçerli düz cevaplardır,
     // "❓ Netleştirilmesi gerekenler" gibi harcamaya özgü bir etiketle
     // sarmalamadan olduğu gibi iletilir.
@@ -208,7 +208,7 @@ function islemSonuclariniBirlestir_(parts) {
   if (metinParcalari.length > 0) {
     // Burada en az bir harcama başarıyla eklendi; kalan metin parçaları
     // gerçekten "bu kalem için netleştirme gerekiyor" anlamına gelir (bkz.
-    // Gemini.js > SYSTEM_INSTRUCTION_TEMPLATE > ZORUNLU NETLİK KURALI, kısmi
+    // LLM.js > SYSTEM_INSTRUCTION_TEMPLATE > ZORUNLU NETLİK KURALI, kısmi
     // ekleme senaryosu).
     bloklar.push(
       "❓ Netleştirilmesi gerekenler:\n" + metinParcalari.join("\n"),

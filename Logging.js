@@ -2,7 +2,7 @@
  * ============================================================================
  * Gider İşleyici — Ortak Loglama
  * ============================================================================
- * Tüm dosyaların (Main.js, Gemini.js, Telegram.js, Queue.js, retry/*) kullandığı
+ * Tüm dosyaların (Main.js, LLM.js, Telegram.js, Queue.js, retry/*) kullandığı
  * cross-cutting log yardımcıları. Apps Script'te tüm proje dosyaları aynı
  * global scope'u paylaştığı için ayrı bir dosyada tutulması diğer dosyaların
  * bunu "import" etmesini gerektirmez — sadece bu iki fonksiyonun tek bir
@@ -18,7 +18,7 @@ const LOG_MAX_UZUNLUK = 1500;
  * Anonim Web App execution'larında bile Apps Script > Executions altında
  * görünür. Uzun gövdeler kısaltılır ki tek bir devasa satır logu boğmasın.
  *
- * GÜVENLİK: Sır asla loglanmaz. Özellikle Gemini istek URL'i API key içerdiği
+ * GÜVENLİK: Sır asla loglanmaz. Özellikle LLM istek URL'i API key içerdiği
  * için hiçbir zaman basılmaz; Telegram URL'i de bot token içerir.
  *
  * @param {string} etiket Nokta ile ayrılmış kısa yol, ör. "doPost.mesaj".

@@ -1,10 +1,10 @@
 /**
  * ============================================================================
- * Gider İşleyici — Gemini Geçici/Kalıcı Hatalarında Katman 2: Otomatik Tekrar
+ * Gider İşleyici — LLM Geçici/Kalıcı Hatalarında Katman 2: Otomatik Tekrar
  * Deneme Motoru (Trigger Zinciri)
  * ============================================================================
- * Gemini.js > callGeminiIleTekrarDeneme_ (Katman 1) bir mesaj için art arda
- * GEMINI_MAX_DENEME kez denendiği halde GEÇİCİ bir hatayla (503, ağ hatası,
+ * LLM.js > llmIleTekrarDeneme_ (Katman 1) bir mesaj için art arda
+ * LLM_MAX_DENEME kez denendiği halde GEÇİCİ bir hatayla (503, ağ hatası,
  * boş yanıt vb.) başarısız kalırsa, bu dosya o mesaja özel, TEK SEFERLİK bir
  * Apps Script trigger kurar (ilk kez 10 dakika sonrasına). Trigger
  * ateşlendiğinde yine Katman 1 (3 hızlı deneme) çalışır; yine geçici bir
@@ -17,11 +17,11 @@
  * KURULMAZ, satır `PES_EDILDI` durumuna işaretlenir (ASLA silinmez) ve
  * kullanıcıya hem bu mesaj için hem de kuyrukta biriken diğer pes-edilmiş
  * mesajlar için toplu bir bildirim gönderilir. Kalıcı bir HTTP hatası
- * (400/401/403/404 — Gemini.js > GEMINI_KALICI_HTTP_KODLARI) alınırsa hiç
+ * (400/401/403/404 — LLM.js > LLM_KALICI_HTTP_KODLARI) alınırsa hiç
  * retry denenmeden aynı PES_EDILDI yoluna girilir (bkz.
- * pesEdildiKuyruguEkleVeBildir_). Gemini'nin "model şu an yüksek talepte"
+ * pesEdildiKuyruguEkleVeBildir_). LLM'in "model şu an yüksek talepte"
  * (`error.status: "UNAVAILABLE"`) YA DA kota/rate-limit dolu (`httpStatus
- * === 429`) yanıtları özel olarak tanınır (Gemini.js > hataYuksekTalepMi_):
+ * === 429`) yanıtları özel olarak tanınır (LLM.js > hataYuksekTalepMi_):
  * sebep zaten bilindiği için Katman 1'in hızlı denemeleri boşuna harcanmaz,
  * doğrudan Katman 2'ye (bu dosya) geçilir — 429'da özellikle önemli, çünkü
  * zaten dolu bir kotanın üstüne hemen tekrar istek atmak durumu kötüleştirir
@@ -47,10 +47,10 @@
  *
  * Bu, doPost'un HER metin mesajı için zaten çağırdığı `kuyrugaEkle_`'nin
  * (Queue.js) A:D'yi (update_id/chat_id/text/date) doldurduğu satırın AYNISINI
- * kullanır — Gemini başarısız olduğunda `kuyrukSatiriniUpdateIdIleBul_` o
+ * kullanır — LLM başarısız olduğunda `kuyrukSatiriniUpdateIdIleBul_` o
  * satırı update_id ile bulup E:K'yı doldurur (YENİ bir satır EKLEMEZ). Yani bu
  * sekmedeki satırların TÜMÜ retry-takip kaydı DEĞİLDİR: `durum` (E) boşsa o
- * mesaj normal işlendi ya da hiç Gemini'ye gitmedi (komut vb.); `durum`
+ * mesaj normal işlendi ya da hiç LLM'e gitmedi (komut vb.); `durum`
  * BEKLIYOR/ISLENIYOR/PES_EDILDI/TAMAMLANDI'dan biriyse retry sistemine
  * girmiştir.
  *
@@ -71,15 +71,15 @@
  * `zamanlanmisTekrarDenemeyiIsle`/`yenidenDenemeKuyruguEkle_`/
  * `pesEdildiKuyruguEkleVeBildir_`'e EK OLARAK `Queue.js > kuyrugaEkle_`'den
  * de (kilitli sarmalayıcı `bakimYapKilitli_` ile) çağrılır — bu fonksiyon HER
- * metin mesajında (Gemini başarılı olsun olmasın) çalıştığı için, Gemini hiç
+ * metin mesajında (LLM başarılı olsun olmasın) çalıştığı için, LLM hiç
  * hata vermese bile bakım düzenli fırsat bulur (sürekli bir trigger kurmadan,
- * 2026-09-26 kullanıcı kararı — aksi halde ilk temizlik ancak ilk Gemini
+ * 2026-09-26 kullanıcı kararı — aksi halde ilk temizlik ancak ilk LLM
  * hatasında tetiklenirdi).
  *
  * İlgili diğer dosyalar:
  *   - Queue.js: QUEUE_HEADERS/getOrCreateQueueSheet_/kuyrugaEkle_ (paylaşılan
  *     sekme ve A:D kontratı burada yönetilir)
- *   - Gemini.js: callGeminiIleTekrarDeneme_ / hataGeciciMi_ / mesajiIsleVeYanitla_
+ *   - LLM.js: llmIleTekrarDeneme_ / hataGeciciMi_ / mesajiIsleVeYanitla_
  *   - Telegram.js: sendTelegramMessage_
  *   - Main.js: doPost (geçici hatada yenidenDenemeKuyruguEkle_'yi, kalıcı
  *     hatada pesEdildiKuyruguEkleVeBildir_'i çağırır)
@@ -173,7 +173,7 @@ function kuyrukTumSatirlariOku_(sheet) {
  * `update_id`'ye sahip satırı bulur (en son eklenenden geriye doğru arar —
  * pratikte aranan satır genelde kuyrugaEkle_'nin AZ ÖNCE eklediği en son
  * satırdır). Bulunamazsa null döner (savunma amaçlı — normalde HER metin
- * mesajı için doPost bu satırı Gemini'den ÖNCE zaten ekler).
+ * mesajı için doPost bu satırı LLM'den ÖNCE zaten ekler).
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {number} updateId
  * @return {Object|null}
@@ -263,7 +263,7 @@ function satiriPesEdildiOlarakIsaretle_(sheet, row, hataMesaji, simdi) {
  * pesEdildiKuyruguEkleVeBildir_, zamanlanmisTekrarDenemeyiIsle) başında ucuz
  * bir ilk-adım olarak çağrılır VE (kilitli sarmalayıcısı `bakimYapKilitli_`
  * üzerinden) `Queue.js > kuyrugaEkle_`'den HER mesajda çağrılır — böylece
- * Gemini hiç hata vermese bile temizlik düzenli fırsat bulur.
+ * LLM hiç hata vermese bile temizlik düzenli fırsat bulur.
  *
  * Silme İŞLEMİ TOPLU yapılır (kullanıcı kararı, 2026-09-26): tek tek
  * `deleteRow` çağırmak yerine, silinecek satır numaraları ardışık aralıklara
@@ -390,7 +390,7 @@ function bakimYap_(sheet, simdi) {
  * pesEdildiKuyruguEkleVeBildir_, zamanlanmisTekrarDenemeyiIsle) AYNI kilidi
  * kullanır, böylece aynı anda iki bakımın çakışıp satır numaralarını/trigger
  * durumunu bozması önlenir. `Queue.js > kuyrugaEkle_` tarafından HER mesajda
- * çağrılır (Gemini başarılı olsun olmasın) — Gemini hiç hata vermese bile
+ * çağrılır (LLM başarılı olsun olmasın) — LLM hiç hata vermese bile
  * hem FIFO temizliği hem sahipsiz-trigger taraması düzenli fırsat bulur,
  * sürekli bir trigger kurmadan (2026-09-26/2026-09-29 kullanıcı kararları).
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
@@ -497,9 +497,9 @@ function zamanliTetikleyiciSil_(triggerId) {
 // ============================================================================
 
 /**
- * Katman 1 (callGeminiIleTekrarDeneme_) GEÇİCİ bir hatayla tükendiğinde
+ * Katman 1 (llmIleTekrarDeneme_) GEÇİCİ bir hatayla tükendiğinde
  * `doPost` tarafından çağrılır. `kuyrugaEkle_`'nin (Queue.js) bu `update_id`
- * için AZ ÖNCE (aynı doPost execution'ında, Gemini çağrısından ÖNCE) eklediği
+ * için AZ ÖNCE (aynı doPost execution'ında, LLM çağrısından ÖNCE) eklediği
  * satırı bulup E:K kolonlarını doldurur — YENİ bir satır EKLEMEZ. O satır
  * (savunma amaçlı, normalde olmaması gereken bir durumda) bulunamazsa mesajı
  * kaybetmemek için tam bir satır olarak eklenir. 10 dakika sonrasına ilk
@@ -519,7 +519,7 @@ function zamanliTetikleyiciSil_(triggerId) {
  * @param {string} text
  * @param {number} mesajTarihiSaniye Telegram update.message.date (Unix saniye).
  * @param {string} hataMesaji Kullanıcıya gösterilecek, temizlenmiş metin
- *   (bkz. Gemini.js > kullaniciyaGosterilecekHataMetni_) — çağıran taraf
+ *   (bkz. LLM.js > kullaniciyaGosterilecekHataMetni_) — çağıran taraf
  *   (Main.js > doPost) ham hatayı buraya ASLA geçirmemeli.
  * @param {number} [messageId] Telegram update.message.message_id — savunma
  *   amaçlı fallback satırının L kolonuna yazılması için.
@@ -625,7 +625,7 @@ function yenidenDenemeKuyruguEkle_(
  * @param {string} text
  * @param {number} mesajTarihiSaniye
  * @param {string} hataMesaji Kullanıcıya gösterilecek, temizlenmiş metin
- *   (bkz. Gemini.js > kullaniciyaGosterilecekHataMetni_).
+ *   (bkz. LLM.js > kullaniciyaGosterilecekHataMetni_).
  * @param {number} [messageId] Telegram update.message.message_id — savunma
  *   amaçlı fallback satırının L kolonuna yazılması için.
  */
@@ -780,7 +780,7 @@ function zamanlanmisTekrarDenemeyiIsle() {
       });
 
     // Claim: bu satırları tetikleyen (artık ateşlenmiş) trigger'ları temizle,
-    // durumu ISLENIYOR yap — Gemini çağrısı kilit DIŞINDA yapılacak.
+    // durumu ISLENIYOR yap — LLM çağrısı kilit DIŞINDA yapılacak.
     vadesiGelenler.forEach(function (row) {
       zamanliTetikleyiciSil_(row.triggerId);
       satiriGuncelle_(sheet, row, {

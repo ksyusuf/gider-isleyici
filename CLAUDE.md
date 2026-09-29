@@ -725,6 +725,61 @@ envanteri diff'i tüm dosyalarda tekrarlandı. Gerçek trigger silme/Sheets
 etkileşimi kullanıcı tarafından gerçek ortamda test edilmeli — bkz. aşağıdaki
 "Az-token doğrulama rehberi"ne eklenen satır.
 
+## Gemini → generic LLM katmanı (Groq) geçişi (2026-09-29)
+
+Gemini API sık 503/429 verdiği için kullanıcı Groq'a geçti. **Gemini kodu
+tamamen kaldırıldı** (kullanıcı kararı); kod sağlayıcıdan bağımsız (`LLM` öneki)
+yazıldı, tek adaptör Groq. **Bu dosyadaki diğer bölümlerde geçen `Gemini.js`,
+`callGemini_`, `GEMINI_*`, `CONFIG.geminiApiKey` adları TARİHSELDİR** — güncel
+karşılıkları:
+
+| Eski | Yeni |
+| --- | --- |
+| `Gemini.js` | `LLM.js` (çekirdek) + `LLMGroq.js` (adaptör) + `LLMTest.js` (test) |
+| `callGemini_` | `llmCagir_(profil, metin, zaman)` → `llmSaglayici_(ad).istekGonder` |
+| `callGeminiIleTekrarDeneme_` | `llmIleTekrarDeneme_` (hep `CONFIG.llm.prod`) |
+| `GEMINI_MAX_DENEME` / `_RETRY_GECIKMELER_MS` / `_KALICI_HTTP_KODLARI` / `_YOGUN_KULLANICI_MESAJI` | `LLM_...` |
+| `CONFIG.geminiApiKey/geminiModel`, `GEMINI_API_KEY` | `CONFIG.llm.prod/.test` = `{provider, apiKey, model}` |
+
+**Profiller (Script Properties, model adı kodda sabit DEĞİL):** `LLM_PROD_PROVIDER`
+(varsayılan `groq`) / `LLM_PROD_API_KEY` / `LLM_PROD_MODEL` — `doPost` + retry
+akışı; `LLM_TEST_*` aynı üçlü — YALNIZCA `LLMTest.js` (kullanıcı kararı; `doPost`
+asla test profilini kullanmaz, `TEST_MODE`'dan bağımsız). Eski `GEMINI_API_KEY`
+artık okunmaz.
+
+**İç ortak format değişmedi:** adaptör yanıtı `parts` dizisine normalize eder
+(`{functionCall:{name,args}}` / `{text}`) → `Telegram.js > islemSonuclariniBirlestir_`
+ve `retry/*` DOKUNULMADI. Yeni sağlayıcı = yeni `LLM<Ad>.js` adaptörü +
+`llmSaglayici_` kaydı. `llmSaglayici_` bilerek fonksiyon (const değil): Apps
+Script dosya yükleme sırasına bağımlılık olmasın.
+
+**Groq'a özgü hata kuralları (`LLM.js`):** `hataYuksekTalepMi_` artık sadece
+HTTP 429 veya 503 (doğrudan Katman 2). Groq `400 tool_use_failed` (model tool
+adını bozuyor — testte `haracamaEkle` görüldü) kalıcı SAYILMAZ:
+`err.tekrarDenenebilir=true` → `hataGeciciMi_` geçici sayar, Katman 1 tekrar dener
+(bozuk argüman JSON'u ve boş yanıt da aynı şekilde). Diğer 400/401/403/404
+kalıcı. Adaptör `null` argümanları (`aciklama: null`) atar. Kullanıcıya giden
+metinler "Yapay zeka servisi ..." (JSON yok).
+
+**Test fonksiyonları (editörden, yan etkisiz — Sheets/trigger/Telegram yok,
+fonksiyon çalıştırmaz):** `llmTest()` (örnek "dün teknosadan telefon aldım 50000
+tl", gerçek systemInstruction+TOOLS, okunaklı blok çıktı, normalize `parts`'ı
+gösterir), `llmModelleriListele()`.
+
+**Model bulguları (elle testler):** `llama-3.3-70b-versatile` hesapta yok (404);
+hesapta tool'a uygun adaylar `openai/gpt-oss-120b`, `openai/gpt-oss-20b`,
+`qwen/qwen3.8-27b`. 120b iki denemede tool adını bozdu (`haracamaEkle`) ve
+firmayı tutarsız yazdı; 20b tek denemede doğruydu — küçük örneklem, kesin
+hüküm YOK (ileride N-deneme başarı oranı testi eklenebilir).
+
+**Doğrulama:** `node --check` tüm dosyalarda geçti; saf fonksiyonlar (hata
+sınıflandırma, Groq normalize, tip küçültme, temiz hata metni) izole Node
+harness'ıyla 12/12 PASS. Gerçek Groq/prod akışı BU OTURUMDA denenmedi.
+**Kullanıcı adımları:** Script Properties'e `LLM_PROD_*` ve `LLM_TEST_*` gir →
+`llmModelleriListele()` → `llmTest()` → `clasp push` + AYNI deployment ID'ye
+`clasp deploy -i` (uzakta eski `Gemini.js` kalırsa editörden sil) → gerçek
+Telegram mesajıyla uçtan uca doğrula.
+
 ## Bilinen varsayımlar / kırılgan noktalar
 
 - `SHEET_LAYOUT` (`START_ROW=3`, `START_COL=4`/D, `NUM_COLS=6`) tamamen
