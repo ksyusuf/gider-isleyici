@@ -745,7 +745,7 @@ karşılıkları:
 (varsayılan `groq`) / `LLM_PROD_API_KEY` / `LLM_PROD_MODEL` — `doPost` + retry
 akışı; `LLM_TEST_*` aynı üçlü — YALNIZCA `LLMTest.js` (kullanıcı kararı; `doPost`
 asla test profilini kullanmaz, `TEST_MODE`'dan bağımsız). Eski `GEMINI_API_KEY`
-artık okunmaz.
+artık okunmaz. (Tool/parametre adları da değişti — bkz. aşağıdaki "Prompt + tool yeniden yazımı".)
 
 **İç ortak format değişmedi:** adaptör yanıtı `parts` dizisine normalize eder
 (`{functionCall:{name,args}}` / `{text}`) → `Telegram.js > islemSonuclariniBirlestir_`
@@ -779,6 +779,60 @@ harness'ıyla 12/12 PASS. Gerçek Groq/prod akışı BU OTURUMDA denenmedi.
 `llmModelleriListele()` → `llmTest()` → `clasp push` + AYNI deployment ID'ye
 `clasp deploy -i` (uzakta eski `Gemini.js` kalırsa editörden sil) → gerçek
 Telegram mesajıyla uçtan uca doğrula.
+
+### Prompt + tool yeniden yazımı: İngilizce talimat, Türkçe veri (2026-09-29)
+
+Sebep: Groq testlerinde Türkçe tool adı bozuluyordu (`haracamaEkle`/`harçamaEkle` → 400
+`tool_use_failed`; 120b'de 5/5), `aciklama:null` Groq sunucu şema doğrulamasında 400 veriyordu,
+firma adı Türkçe hâl ekiyle bozuluyordu ("teknosadan" → "Teknos") ve istek ~4679 token'dı
+(Groq ücretsiz TPM 8000 → 429).
+
+- **Tool adları (İngilizce, `Config.js > TOOLS`):** `harcamaEkle`→`add_expenses` (liste; içte kalem başına `add_expense` — bkz. çoklu harcama kararı),
+  `taksitliHarcamaEkle`→`add_installment_expense`, `sonHarcamalariGetir`→`get_recent_expenses`,
+  `sonHarcamalariTopla`→`sum_recent_expenses`. **Parametreler:** tutar→`amount`,
+  kategori→`category`, aciklama→`note`, tarih→`date`, firma→`merchant`, malzeme→`item`,
+  tutarTipi→`amount_type` (`TOTAL`|`PER_INSTALLMENT`), taksitSayisi→`installment_count`,
+  ilkTarih→`first_date`, adet→`count`. `category` enum değerleri TÜRKÇE kaldı (sheet'e literal).
+- **`Expenses.js` DEĞİŞMEDİ:** Türkçe iç fonksiyon/arg adları orada; `LLM.js > FUNCTION_MAP` artık
+  İngilizce→Türkçe çeviren sarmalayıcılar (`TUTAR_TIPI_CEVIRI_`: TOTAL→TOPLAM,
+  PER_INSTALLMENT→TAKSIT_BASI; bilinmeyen değer aynen geçer, Expenses doğrulaması reddeder).
+- **Prompt (`LLM.js > SYSTEM_INSTRUCTION_TEMPLATE`, İngilizce):** statik bölümler önce, mesaj zamanı
+  (`{MESSAGE_TIME}`) EN SONDA (prefix sabit → caching'e uygun). Bölümler: ROLE, LANGUAGE CONTRACT
+  (kullanıcı mesajları ve tüm örnekler Türkçe/çevrilmemiş; merchant/item/note Türkçe; category Türkçe
+  enum; kullanıcıya cevap Türkçe), TOOL RULES (tam ad; optional alanı HİÇ gönderme, asla null/boş),
+  DATE RULES, CATEGORIES (+ karışabilen çiftler — kararlar değişmedi), INSTALLMENTS,
+  MANDATORY CLARITY RULE, FIELD RULES (**yeni:** merchant'tan Türkçe hâl eklerini at, harfleri koru),
+  EXAMPLES (17 few-shot, Türkçe girdiler), CURRENT MESSAGE CONTEXT. Kurallar prompt'ta TEK yerde;
+  TOOLS description'ları kısa (enum/required şema zorlaması + `dogrulaKategori_` kod doğrulaması kalır).
+- **`KATEGORILER[].kapsar/kapsamaz` İngilizce** (Türkçe sinyal kelimeler tırnakta: "takı", "akbil"…);
+  `ad`/`anahtar` değişmedi. Blok etiketleri "Includes:/Excludes:".
+- **`LLMGroq.js`:** `temperature: 0`; opsiyonel `reasoning_effort` (Script Property
+  `LLM_PROD_REASONING_EFFORT` / `LLM_TEST_REASONING_EFFORT`; doğruluk öncelikli olduğu için `medium` önerilir (kullanıcı kararı 2026-09-29, `low` önerisi geri alındı); boşsa
+  gönderilmez); yanıttaki `usage` (prompt/completion token) döner ve loglanır.
+- **`LLMTest.js`:** `llmTest(mesaj)` (token'ı da basar) + harcama tipi başına TEK istek atan fonksiyonlar
+  (editörden birer birer çalıştır; TPM 8000 → 429'a takılmamak için ard arda değil): `llmTest_tek`,
+  `llmTest_coklu`, `llmTest_coklu3`, `llmTest_taksit`, `llmTest_taksitBelirsiz`, `llmTest_belirsizTutar`,
+  `llmTest_kismi`, `llmTest_kategoriYemek`, `llmTest_kategoriDijital`, `llmTest_selam`, `llmTest_ozel`.
+  (Toplu `llmPromptTest` kaldırıldı — kullanıcı kararı: test aracının amacı farklı harcama tiplerinde
+  API yanıt biçimini/tutarlılığını görmek, 429 zaten prodda üst katmanda ele alınıyor.)
+- **Çoklu harcama bulgusu ve KARAR (20b/Groq):** "markette 200 tl alışveriş yaptım, otobüse 15 lira
+  verdim" → modelin `reasoning` alanı iki kalemi de doğru planlıyor ("call add_expense twice") ama API
+  yanıtındaki `tool_calls` dizisinde YALNIZCA İLK çağrı var (3 denemede aynı; prompt güçlendirme ve
+  `parallel_tool_calls:true` işe yaramadı) → gpt-oss'un Groq'ta paralel tool çağrısı zayıflığı.
+  **Çözüm (best practice: paralel çağrıya güvenme, tek çağrıda liste):** LLM'e görünen tool artık
+  `add_expenses(expenses: [{amount,category,date,merchant,item,note}, ...])` (tekil harcama = 1 elemanlı
+  liste; `add_expense` şemadan KALDIRILDI). `LLM.js > llmPartsGenislet_` bu diziyi kalem başına iç
+  `add_expense` functionCall'larına açar (`mesajiIsleVeYanitla_` içinde, `islemSonuclariniBirlestir_`'den
+  önce) → kalem başı hata izolasyonu ve ayrı onay blokları korunur. `FUNCTION_MAP.add_expense` iç
+  kullanım için kalır; `FUNCTION_MAP.add_expenses` yalnızca bozuk çıktıda ("expenses" dizi değil/boş)
+  uyarı fırlatır. `merchant` için "generic yer kelimeleri (market/kafe/eczane) merchant değildir" kuralı da
+  eklendi. **Doğrulanmadı** — `llmTest_coklu()` / `llmTest_coklu3()` gerçek Groq'ta çalıştırılmalı
+  (izole Node harness'ı genişletme/hata izolasyonu/şema dönüşümünü 12/12 doğruladı).- **Doğrulama:** `node --check` hepsi geçti; izole harness'ta 11/11 PASS (yer tutucu kalmadı, 17 kategori,
+  zaman bağlamı sonda, FUNCTION_MAP↔TOOLS adları, arg çevirileri). Prompt+tools tahmini ≈3,3–3,7k token
+  (referans: eski 4679) — GERÇEK ölçüm ve model davranışı kullanıcının `llmPromptTest()` çalıştırmasına
+  bağlı, bu oturumda Groq'a istek atılmadı.
+- **Bilinçli kapsam dışı:** 429'da Katman 1'de kısa bekleme ("try again in Xs" — Katman 2 ilk aşaması
+  10 dk), `failed_generation` kurtarma/fuzzy ad eşleştirme (İngilizce adlar yetmezse).
 
 ## Bilinen varsayımlar / kırılgan noktalar
 

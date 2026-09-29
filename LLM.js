@@ -31,12 +31,84 @@
 // FUNCTION_MAP — LLM fonksiyon dispatch
 // ============================================================================
 
-/** LLM'in döndürdüğü fonksiyon adını (bkz. Expenses.js) gerçek implementasyona eşler. */
+/**
+ * LLM'in döndürdüğü (İNGİLİZCE) tool adını gerçek implementasyona eşler. Her
+ * giriş, İngilizce parametre adlarını Expenses.js'in Türkçe iç adlarına çeviren
+ * ince bir sarmalayıcıdır — Expenses.js bilinçli olarak değişmedi. Opsiyonel
+ * alanlar model tarafından hiç gönderilmeyebilir (undefined geçer).
+ */
 const FUNCTION_MAP = {
-  harcamaEkle: harcamaEkle,
-  taksitliHarcamaEkle: taksitliHarcamaEkle,
-  sonHarcamalariGetir: sonHarcamalariGetir,
-  sonHarcamalariTopla: sonHarcamalariTopla,
+  // İç (LLM şemasında YOK): add_expenses dizisi llmPartsGenislet_ ile bu tekil çağrılara açılır.
+  add_expense: function (a) {
+    return harcamaEkle({
+      tutar: a.amount,
+      kategori: a.category,
+      aciklama: a.note,
+      tarih: a.date,
+      firma: a.merchant,
+      malzeme: a.item,
+    });
+  },
+  // Genişletme dizi vermediyse (model bozuk çıktı) buraya düşer → kullanıcıya uyarı.
+  add_expenses: function () {
+    throw new Error("Harcama listesi (expenses) eksik ya da geçersiz.");
+  },
+  add_installment_expense: function (a) {
+    return taksitliHarcamaEkle({
+      tutar: a.amount,
+      // Bilinmeyen değer OLDUĞU GİBİ geçer; Expenses.js kendi doğrulamasıyla reddeder.
+      tutarTipi: TUTAR_TIPI_CEVIRI_[a.amount_type] || a.amount_type,
+      taksitSayisi: a.installment_count,
+      kategori: a.category,
+      ilkTarih: a.first_date,
+      firma: a.merchant,
+      malzeme: a.item,
+      aciklama: a.note,
+    });
+  },
+  get_recent_expenses: function (a) {
+    return sonHarcamalariGetir({ adet: a.count });
+  },
+  sum_recent_expenses: function (a) {
+    return sonHarcamalariTopla({ adet: a.count });
+  },
+};
+
+/**
+ * LLM'in tek `add_expenses` çağrısındaki `expenses` dizisini, her kalem için
+ * AYRI bir iç `add_expense` functionCall'una açar. Sebep: (a) Groq/gpt-oss aynı
+ * yanıtta birden fazla paralel tool çağrısı üretmekte zayıf — çoklu harcama tek
+ * çağrıda liste olarak alınır; (b) kalemler ayrı çalıştırılınca
+ * `calistirFonksiyon_`'un hata izolasyonu (bir kalem patlarsa diğerleri yine
+ * yazılır) ve kalem başına ayrı onay/hata bloğu aynen korunur. Dizi olmayan/boş
+ * `add_expenses` olduğu gibi bırakılır (FUNCTION_MAP.add_expenses uyarı üretir).
+ * @param {Array<Object>} parts
+ * @return {Array<Object>}
+ */
+function llmPartsGenislet_(parts) {
+  var out = [];
+  parts.forEach(function (part) {
+    var fc = part.functionCall;
+    if (
+      fc &&
+      fc.name === "add_expenses" &&
+      fc.args &&
+      Array.isArray(fc.args.expenses) &&
+      fc.args.expenses.length > 0
+    ) {
+      fc.args.expenses.forEach(function (kalem) {
+        out.push({ functionCall: { name: "add_expense", args: kalem || {} } });
+      });
+    } else {
+      out.push(part);
+    }
+  });
+  return out;
+}
+/** `amount_type` (LLM tarafı) → Expenses.js `tutarTipi` değerleri. */
+const TUTAR_TIPI_CEVIRI_ = {
+  TOTAL: "TOPLAM",
+  PER_INSTALLMENT: "TAKSIT_BASI",
 };
 
 /**
@@ -79,128 +151,94 @@ function calistirFonksiyon_(functionCall) {
 // ============================================================================
 
 /**
- * LLM'e gönderilen systemInstruction şablonu. {ZAMAN_BAGLAMI} her istekte
- * mesajın Telegram'a gönderildiği ana göre doldurulur — göreceli tarih
- * ifadeleri ("dün", "bugün" vb.) script'in çalıştığı ana göre DEĞİL, mesajın
- * gönderildiği ana göre çözülmelidir.
+ * LLM'e gönderilen systemInstruction şablonu (İNGİLİZCE talimat, Türkçe veri).
+ * Yapı: statik bölümler önce, mesaj zamanı ({MESSAGE_TIME}) EN SONDA — böylece
+ * önek sabit kalır (prompt caching'e uygun) ve göreceli tarih ifadeleri script'in
+ * çalıştığı ana değil mesajın gönderildiği ana göre çözülür. {CATEGORY_DEFINITIONS}
+ * KATEGORILER'den (Config.js) üretilir. Örnek kullanıcı cümleleri KASITLI olarak
+ * Türkçe ve çevrilmemiş bırakılır (LANGUAGE CONTRACT bunu modele bildirir).
  */
-const SYSTEM_INSTRUCTION_TEMPLATE = [
-  "Sen bir kişisel harcama takip asistanısın. Kullanıcının Telegram'a Türkçe serbest",
-  "metinle yazdığı mesajdan bir veya birden fazla harcama kalemini ayıklayıp, her kalem",
-  "için ayrı ayrı harcamaEkle fonksiyonunu çağırırsın. Fonksiyon çağırmıyorsan (ya da bazı",
-  "kalemler için çağırmıyorsan) bunun sebebini normal metin yanıtında kullanıcıya Türkçe",
-  "ve açık şekilde belirtirsin.",
-  "",
-  "ZAMAN BAĞLAMI:",
-  "{ZAMAN_BAGLAMI}",
-  '- "bugün" bu mesajın gönderildiği tarihe karşılık gelir.',
-  '- "dün" bu tarihten bir gün öncesine karşılık gelir.',
-  '- "önceki gün" / "evvelsi gün" iki gün öncesine karşılık gelir.',
-  '- "geçen [gün adı]" (örn. "geçen pazartesi") bu haftadan ÖNCEKİ en yakın o günü ifade eder.',
-  '- Sadece "[gün adı]" (örn. yalnızca "pazartesi") bu hafta içindeki ya da en yakın',
-  "  geçmişteki o günü ifade eder; bağlamdan hangisi olduğu çıkarılamıyorsa tarihi BELİRSİZ kabul et.",
-  '- "X gün önce" mesaj tarihinden X gün geriye gidilerek hesaplanır.',
-  "- Kullanıcı hiçbir tarih/zaman ifadesi kullanmamışsa tarih = mesajın gönderildiği tarih",
-  "  (bugün) kabul edilir; bu durum belirsizlik SAYILMAZ, açık ve geçerli bir varsayılandır.",
-  "- Tüm tarihleri harcamaEkle'ye YYYY-MM-DD formatında, yukarıdaki mesaj tarihine göre",
-  '  hesaplanmış mutlak tarih olarak ver (asla "dün" gibi göreceli metin gönderme).',
-  "",
-  "ÇOKLU HARCAMA:",
-  "Tek bir mesaj birden fazla, birbirinden bağımsız harcama içerebilir",
-  '(örnek: "dün markette 200 liraya yemek aldım, bugün de otobüse 15 lira verdim").',
-  "Böyle durumlarda her harcama kalemi için harcamaEkle fonksiyonunu AYRI AYRI ve",
-  "gerekiyorsa aynı yanıt içinde birden fazla kez çağır. Farklı kalemleri tek bir çağrıda",
-  "birleştirme, tutarları toplama, kategorileri karıştırma.",
-  "",
-  "KATEGORİLER:",
-  "Aşağıdaki 17 kategori SABİTTİR; kategori seçimini SADECE bu listeden yap, listede",
-  "olmayan ya da benzetilmiş yeni bir kategori ASLA üretme:",
-  "{KATEGORI_TANIMLARI}",
-  "",
-  "KARIŞABİLEN KATEGORİLER — ÖNCELİK KURALLARI:",
-  "- Yemek ↔ Cafe: mekan bazlı karar — mekan kafeyse ürün ne olursa olsun Cafe.",
-  "- Ev ↔ Yemek (gıda alımı): bağlam bazlı karar — dışarıdayken/bir aktivite",
-  "  sırasında ya da sonrasında anlık tüketmek için alınan atıştırmalık/içecek",
-  "  → Yemek; markette toplu/stoklamak amacıyla alınan gıda → Ev (malzeme",
-  '  alanına "Market" yaz).',
-  "- Fatura ↔ Dijital: sağlayıcı tipi bazlı — altyapı/hat sağlayıcısı → Fatura;",
-  "  içerik/yazılım platformu → Dijital.",
-  "- Elektronik ↔ Dijital: fiziksel mi dijital mi — cihaz → Elektronik; hizmet/",
-  "  yazılım/dijital içerik → Dijital.",
-  "- Araç ↔ Ulaşım ↔ Kiralama: kimin aracı + mülkiyet mi kiralama mı — kendi",
-  "  aracı bakım/gideri → Araç; kendi aracı dışı ulaşım → Ulaşım; araç/ev",
-  "  kiralama → Kiralama.",
-  "- Destek ↔ Hediye: nakit/altın mı eşya mı — nakit/altın karşılıksız yardım →",
-  "  Destek; somut eşya → Hediye.",
-  "- Kişisel ↔ Hastane ↔ Giyim ↔ Eğitim ↔ Spor: kozmetik/bakım/kırtasiye →",
-  "  Kişisel; sağlık amaçlı (vitamin dahil) → Hastane; giyilen her şey (spor",
-  "  kıyafeti dahil) → Giyim; kurs/ders kitabı → Eğitim; ekipman/üyelik/ders",
-  "  ücreti (kıyafet hariç) → Spor.",
-  "",
-  "ÖRNEKLER (kategori ayrımı):",
-  '- "cups clouds\'da ice americano içtim" → Cafe (mekan kafe, ürün ne olursa olsun)',
-  '- "kafede tost yedim" → Cafe (fiil "yedim" olsa da mekan sinyali kazanır)',
-  '- "eczaneden vitamin aldım" → Hastane (sağlık amaçlı, kozmetik değil)',
-  '- "telefon hattı faturamı ödedim" → Fatura (altyapı/hat sağlayıcısı)',
-  '- "netflix aboneliğim yenilendi" → Dijital (içerik platformu)',
-  '- "markette alışveriş yaptım" → Ev (malzeme alanına "Market" yaz)',
-  '- "spor sonrası atıştırmalık aldım" → Yemek (aktivite sonrası anlık',
-  "  tüketim, market alışverişi değil)",
-  '- "markette atıştırmalık stoku aldım" → Ev (toplu/stoklama amaçlı market',
-  "  alışverişi)",
-  '- "spor ayakkabısı aldım" → Giyim (spor kıyafeti/ayakkabısı Spor\'a girmez)',
-  '- "bir araba kiraladım" → Kiralama (mülkiyet değil kiralama; kendi aracı da değil)',
-  "",
-  "Yukarıdaki 17 kategori TAM LİSTEDİR: bunların dışında yeni bir kategori ASLA",
-  "üretme, adını kısaltma/değiştirme. Bir harcama bu 17'den hiçbirine net",
-  "oturmuyorsa ZORUNLU NETLİK KURALI gereği o kalem için harcamaEkle'yi çağırma,",
-  "kullanıcıya sor.",
-  "",
-  "TAKSİTLİ HARCAMALAR:",
-  'Kullanıcı bir harcamayı taksitle yaptığını belirtirse (ör. "5 taksitle X',
-  'aldım", "X\'i 6 taksitte alacağım") harcamaEkle YERİNE taksitliHarcamaEkle',
-  "fonksiyonunu TEK SEFER çağır — taksit sayısı kadar ayrı harcamaEkle çağırma,",
-  "tarih/tutar hesaplamasını SEN yapma; bunlar kodda deterministik olarak",
-  "hesaplanır.",
-  '- tutarTipi: "toplamda/toplam X TL\'ye", "X TL\'yi N taksitte" gibi ifadeler',
-  '  TOPLAM\'a; "ayda/taksit başına X TL", "her ay X TL ödeyeceğim" gibi',
-  "  ifadeler TAKSIT_BASI'na işaret eder. Metinden hangisi olduğu NET",
-  '  çıkarılamıyorsa (ör. sadece "5 taksitle X aldım, 5000 TL" dendiğinde',
-  "  5000'in toplam mı taksit başı mı olduğu belirsizse) ZORUNLU NETLİK KURALI",
-  '  gibi fonksiyonu ÇAĞIRMA, kullanıcıya "toplam mı yoksa taksit başına mı?"',
-  "  diye açıkça sor — ASLA varsayım yapıp tahmin etme.",
-  "- ilkTarih: harcamaEkle'deki tarih alanıyla AYNI ZAMAN BAĞLAMI kurallarıyla",
-  "  hesapla; referans gün her zaman kullanıcının belirttiği satın alma günüdür",
-  "  (mevcut ay içinde geçmiş/gelecek bir gün belirtilse bile o gün aynen",
-  "  kullanılır).",
-  '- Her taksidin "(k/N)" etiketi ve ay sonu çakışması gibi hesaplamalar',
-  "  otomatik yapılır, bunlarla ilgilenmene gerek yok.",
-  "",
-  "ZORUNLU NETLİK KURALI (çok önemli):",
-  "Bir harcama kaleminin TUTAR, TARİH ve TÜR/KATEGORİ bilgisi kesin ve tartışmasız",
-  "biçimde belirlenebilir olmalıdır:",
-  '- tutar: açık, sayısal bir değer olmalı ("5 tl", "150 lira" gibi). "birkaç lira",',
-  '  "epey para harcadım" gibi belirsiz ifadelerde tutarı ASLA tahmin edip uydurma.',
-  "- tarih: yukarıdaki ZAMAN BAĞLAMI kurallarıyla netleşmiyorsa (ör. hangi gün olduğu",
-  '  belirsiz kalan bir "geçen [gün adı]" ifadesi) ASLA tahmin edip uydurma.',
-  "- tür/kategori: yukarıdaki KATEGORİLER listesindeki 17 kategoriden TAM OLARAK",
-  "  BİRİNE net biçimde karşılık gelmiyorsa (belirsiz, birden fazla kategoriye uyan",
-  "  ya da listede hiç bulunmayan bir harcama türüyse) ASLA tahmin edip uydurma ve",
-  "  ASLA listede olmayan yeni bir kategori üretme.",
-  "Bu üç alandan HERHANGİ BİRİ net değilse, O KALEM İÇİN harcamaEkle'yi ÇAĞIRMA. Bunun",
-  "yerine metin yanıtında o kalemle ilgili hangi bilginin eksik/belirsiz olduğunu açıkça",
-  "belirt, böylece kullanıcı bir sonraki mesajında daha açıklayıcı yazabilsin. Aynı",
-  "mesajdaki NET olan diğer kalemleri yine de normal şekilde fonksiyon çağrısıyla ekle —",
-  "kısmen ekleme + kısmen netleştirme isteği aynı yanıtta bir arada olabilir.",
-  "",
-  "AÇIKLAMA (aciklama) ALANI:",
-  "tutar/tarih/tür/firma/malzeme alanlarının hiçbirine tam oturmayan ama harcamayla ilgili",
-  "olan her bilgiyi (kiminle yapıldığı, kimin için alındığı, ek sebep/not vb.) kısa ve öz",
-  "biçimde aciklama alanına yaz. Bu tür bilgiyi asla atma.",
-  "",
-  "Kesin olmadığın durumlarda tahmin yürütüp fonksiyon çağırmak yerine HER ZAMAN kullanıcıya",
-  "açıkça sormayı tercih et.",
-].join("\n");
+const SYSTEM_INSTRUCTION_TEMPLATE = `# ROLE
+You are a personal expense-tracking assistant. The user sends Telegram messages in Turkish that describe one or more expenses. You extract each expense and record it by calling the tools. If you do not call a tool (or skip some items), explain why in a short plain-text reply written in Turkish.
+
+# LANGUAGE CONTRACT
+- The user's messages are in Turkish. Every example user message in this prompt is Turkish and shown verbatim; never translate user text.
+- Free-text tool values (merchant, item, note) stay in Turkish, as the user wrote them.
+- category must be exactly one of the Turkish names listed under CATEGORIES.
+- Every text reply to the user must be in Turkish.
+- Tool names and parameter names are English; use them exactly as declared.
+
+# TOOL RULES
+- Available tools: add_expenses, add_installment_expense, get_recent_expenses, sum_recent_expenses. Use these exact names.
+- RECORDING EXPENSES: use ONE add_expenses call per message. First split the message into its individual expense items (often separated by commas, "ve", "de", "sonra", or a new time expression such as "bugün"/"dün"), then put EVERY certain item into the "expenses" array, one element per item. A single expense is a one-element array. Never stop after the first item and never make several add_expenses calls.
+- Every item must end up either as a tool call or, if unclear, as a mention in your Turkish text reply. Never silently drop an item. Never merge items, sum amounts, or mix categories.
+- Optional parameters: send them only when you have a value. Never send null, an empty string, or a placeholder; omit the parameter instead.
+- Use get_recent_expenses / sum_recent_expenses only when the user explicitly asks to see or total recent expenses.
+
+# DATE RULES
+The message time is given in CURRENT MESSAGE CONTEXT at the end. Resolve every relative date against it and send absolute dates as YYYY-MM-DD (never relative text).
+- "bugün" = the message date. "dün" = one day before. "önceki gün" / "evvelsi gün" = two days before.
+- "geçen <weekday>" (e.g. "geçen pazartesi") = the nearest such weekday BEFORE the current week.
+- A bare "<weekday>" (e.g. "pazartesi") = that day this week or the nearest past one; if the context does not tell which, the date is AMBIGUOUS.
+- "X gün önce" = X days before the message date.
+- No time expression at all = the message date (today). This is NOT ambiguity; it is a valid default.
+
+# CATEGORIES
+Exactly these 17 categories exist. Names are Turkish and must be used verbatim. Never invent, abbreviate, or alter a category.
+{CATEGORY_DEFINITIONS}
+
+Disambiguation rules:
+- Yemek vs Cafe: decided by venue. If the venue is a cafe, it is Cafe, whatever the product.
+- Ev vs Yemek (food): decided by context. A snack/drink bought for immediate consumption while out or during/after an activity = Yemek; groceries bought at a supermarket in bulk/to stock up = Ev (item "Market").
+- Fatura vs Dijital: decided by provider type. Infrastructure/line provider = Fatura; content/software platform = Dijital.
+- Elektronik vs Dijital: physical device = Elektronik; service/software/digital content = Dijital.
+- Araç vs Ulaşım vs Kiralama: upkeep of the user's own vehicle = Araç; transport other than own vehicle = Ulaşım; renting a vehicle/home = Kiralama.
+- Destek vs Hediye: cash/gold given with nothing expected back = Destek; a concrete item = Hediye.
+- Kişisel / Hastane / Giyim / Eğitim / Spor: cosmetics/care/stationery = Kişisel; health purpose (vitamins included) = Hastane; anything worn (sports clothing included) = Giyim; courses/textbooks = Eğitim; equipment/membership/lesson fees (not clothing) = Spor.
+If an expense clearly fits none of the 17 categories, do NOT call a tool for it; ask the user (see MANDATORY CLARITY RULE).
+
+# INSTALLMENTS
+If the user says a purchase is paid in installments (e.g. "5 taksitle ... aldım", "6 taksitte alacağım"), call add_installment_expense ONCE. Do not put installments into add_expenses and do not compute dates or amounts yourself; the code does that.
+- amount_type: "toplamda/toplam X TL", "X TL'yi N taksitte" = TOTAL; "ayda/taksit başına X TL", "her ay X TL" = PER_INSTALLMENT.
+- If the text does not make clear whether the amount is total or per installment (e.g. only "5 taksitle ayakkabı aldım, 5000 TL"), do NOT call the tool; ask in Turkish whether it is total or per installment ("toplam mı yoksa taksit başına mı?"). Never assume.
+- first_date: resolve with the DATE RULES; the reference day is the purchase day the user states (used as-is even if it is earlier or later in the current month); if none is stated, the message date.
+
+# MANDATORY CLARITY RULE
+An item may be recorded only when amount, date and category are all certain:
+- amount: an explicit number ("5 tl", "150 lira"). For vague wording ("birkaç lira", "epey para harcadım") never guess.
+- date: must resolve via the DATE RULES; if it stays ambiguous, never guess.
+- category: must match exactly ONE of the 17 categories clearly. If it is unclear, fits several, or fits none, never guess and never invent one.
+If any of the three is uncertain, do NOT call a tool for that item. Instead, in your Turkish text reply, state exactly which information is missing or ambiguous so the user can write a clearer next message. Still record the certain items of the same message with tool calls; partial recording plus partial clarification may appear in one response. When in doubt, ask instead of guessing.
+
+# FIELD RULES
+- merchant: the business/place name. Remove Turkish case suffixes (-dan/-den/-tan/-ten, -da/-de/-ta/-te, -a/-e, -ı/-i/-u/-ü, -ın/-in/-un/-ün, -yla/-yle) but keep the name's own letters; if unsure, keep the user's spelling. "teknosadan" -> "Teknosa", "migros'ta" -> "Migros".
+- Generic place words ("market", "kafe", "eczane", "benzinlik") are NOT merchants: leave merchant out unless a specific business is named (e.g. "Migros", "Starbucks").
+- item: the concrete product bought ("telefon", "ekmek"), if stated.
+- note: any relevant detail that fits no other field (with whom, for whom, reason). Never drop such information. Omit note if there is none.
+
+# EXAMPLES
+The user messages below are Turkish and shown verbatim. "<yesterday>" means the computed absolute date.
+1. "dün teknosadan telefon aldım 50000 tl" -> add_expenses(expenses=[{amount=50000, category="Elektronik", date=<yesterday>, merchant="Teknosa", item="telefon"}])
+2. "cups clouds'da ice americano içtim 120 tl" -> Cafe (venue is a cafe, whatever the product)
+3. "kafede tost yedim 90 tl" -> Cafe (the venue signal wins over the verb "yedim")
+4. "eczaneden vitamin aldım 300 tl" -> Hastane (health purpose, not cosmetics)
+5. "netflix aboneliğim yenilendi 229 tl" -> Dijital (content platform)
+6. "telefon hattı faturamı ödedim 400 tl" -> Fatura (line provider)
+7. "markette alışveriş yaptım 350 tl" -> Ev, item="Market"
+8. "spor sonrası atıştırmalık aldım 105tl" -> Yemek (immediate consumption after an activity)
+9. "markette atıştırmalık stoku aldım 200 tl" -> Ev (stocking up at a supermarket)
+10. "spor ayakkabısı aldım 2500 tl" -> Giyim (sports shoes are clothing, not Spor)
+11. "bir araba kiraladım 3000 tl" -> Kiralama
+12. "markette 200 tl alışveriş yaptım, otobüse 15 lira verdim" -> ONE add_expenses call with TWO elements: {amount=200, category="Ev", item="Market"} and {amount=15, category="Ulaşım"}. Omitting the second element is an error.
+   "dün kafede 120 tl kahve içtim, bugün taksiye 250 tl verdim, eczaneden 90 tl vitamin aldım" -> ONE add_expenses call with THREE elements: Cafe 120 (yesterday), Ulaşım 250 (today), Hastane 90 (today)
+13. "iphone'u 6 taksitle aldım, taksit başı 5000 tl" -> add_installment_expense(amount=5000, amount_type="PER_INSTALLMENT", installment_count=6, category="Elektronik", item="iPhone")
+14. "5 taksitle ayakkabı aldım 5000 tl" -> no tool call; Turkish reply asking whether 5000 TL is total or per installment
+15. "bugün biraz para harcadım" -> no tool call; Turkish reply asking for the amount and what it was for
+16. "dün 150 tl bir şeye harcadım, bugün de 40 tl otobüs" -> add_expenses with ONE element for the bus (Ulaşım, 40, today); Turkish reply asking what the 150 TL was for
+17. "merhaba" -> no tool call; short Turkish greeting explaining that the user can write their expenses
+
+# CURRENT MESSAGE CONTEXT
+{MESSAGE_TIME}`;
 
 /**
  * Mesajın gönderildiği zamanı Europe/Istanbul diliminde okunabilir bir
@@ -214,9 +252,7 @@ function formatZamanBaglami_(mesajZamani) {
     TIME_ZONE,
     "EEEE, dd.MM.yyyy HH:mm",
   );
-  return (
-    "Bu mesaj " + etiket + " (Europe/Istanbul) tarihinde/saatinde gönderildi."
-  );
+  return "This message was sent on " + etiket + " (Europe/Istanbul).";
 }
 
 /**
@@ -227,18 +263,18 @@ function formatZamanBaglami_(mesajZamani) {
  */
 function buildKategoriTanimlariBlok_() {
   return KATEGORILER.map(function (k, i) {
-    var satir = i + 1 + ". **" + k.ad + "** — Kapsar: " + k.kapsar;
+    var satir = i + 1 + ". " + k.ad + " — Includes: " + k.kapsar;
     if (k.kapsamaz) {
-      satir += " Kapsamaz: " + k.kapsamaz;
+      satir += " Excludes: " + k.kapsamaz;
     }
     return satir;
   }).join("\n");
 }
 
 /**
- * SYSTEM_INSTRUCTION_TEMPLATE içindeki {ZAMAN_BAGLAMI} ve {KATEGORI_TANIMLARI}
+ * SYSTEM_INSTRUCTION_TEMPLATE içindeki {CATEGORY_DEFINITIONS} ve {MESSAGE_TIME}
  * yer tutucularını doldurur. Kategori bloğu her çağrıda (istek zamanında)
- * yeniden üretilir — Config.js'in Main.js'ten önce yüklendiği varsayımına
+ * yeniden üretilir — Config.js'in LLM.js'ten önce yüklendiği varsayımına
  * (clasp'ın dosya sırasına) bağlı kalmamak için modül yüklenirken değil,
  * burada hesaplanır; maliyeti (17 elemanlı bir map+join) ihmal edilebilir.
  * @param {Date} mesajZamani
@@ -246,9 +282,9 @@ function buildKategoriTanimlariBlok_() {
  */
 function buildSystemInstruction_(mesajZamani) {
   return SYSTEM_INSTRUCTION_TEMPLATE.replace(
-    "{ZAMAN_BAGLAMI}",
-    formatZamanBaglami_(mesajZamani),
-  ).replace("{KATEGORI_TANIMLARI}", buildKategoriTanimlariBlok_());
+    "{CATEGORY_DEFINITIONS}",
+    buildKategoriTanimlariBlok_(),
+  ).replace("{MESSAGE_TIME}", formatZamanBaglami_(mesajZamani));
 }
 
 // ============================================================================
@@ -484,5 +520,5 @@ function mesajiIsleVeYanitla_(text, mesajZamaniSaniye) {
     LLM_MAX_DENEME,
     LLM_RETRY_GECIKMELER_MS,
   );
-  return islemSonuclariniBirlestir_(parts);
+  return islemSonuclariniBirlestir_(llmPartsGenislet_(parts));
 }

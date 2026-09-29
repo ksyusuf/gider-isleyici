@@ -14,6 +14,7 @@ ekleyin:
 | --------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LLM_PROD_API_KEY`    | ✅                            | Prod LLM (Groq) API anahtarı — `doPost` ve retry akışı bunu kullanır                                                                                    |
 | `LLM_PROD_MODEL`      | ✅                            | Prod model adı (örn. `openai/gpt-oss-20b`); hesabın erişebildiği adlar için `llmModelleriListele()`                                                     |
+| `LLM_PROD_REASONING_EFFORT` / `LLM_TEST_REASONING_EFFORT` | opsiyonel | `low` / `medium` / `high`. Önerilen: `medium` (doğruluk öncelikli); boşsa gönderilmez (modelin varsayılanı) |
 | `LLM_PROD_PROVIDER`   | opsiyonel                     | Sağlayıcı adaptörü; varsayılan `groq`                                                                                                                   |
 | `LLM_TEST_API_KEY` / `LLM_TEST_MODEL` / `LLM_TEST_PROVIDER` | test için | Aynı üçlü, yalnızca `llmTest()` / `llmModelleriListele()` (LLMTest.js) için; prod akışına dokunmaz                                     |
 | `TELEGRAM_TOKEN`      | ✅                            | BotFather'dan alınan bot token'ı                                                                                                                        |
@@ -111,7 +112,7 @@ bir alt dizin olsa da bunu değiştirmez — clasp `rootDir: ""` +
 | `Logging.js`              | Ortak loglama (`log_`, `logHata_`)                                                                                     |
 | `LLM.js`                  | `FUNCTION_MAP`, sağlayıcıdan bağımsız LLM çekirdeği (systemInstruction, Katman 1 tekrar deneme, hata sınıflandırma, `mesajiIsleVeYanitla_`) |
 | `LLMGroq.js`              | Groq adaptörü (OpenAI uyumlu `chat/completions`; yanıtı ortak `parts` biçimine normalize eder)                          |
-| `LLMTest.js`              | Yan etkisiz API testi: `llmTest()`, `llmModelleriListele()` (TEST profili)                                              |
+| `LLMTest.js`              | Yan etkisiz API testi: `llmTest()`, `llmTest()` / `llmTest_coklu()` gibi harcama tipi başına tek-istek fonksiyonları, `llmModelleriListele()` (TEST profili)                                              |
 | `Telegram.js`             | Telegram gönderim (`sendTelegramMessage_`), `/` komut işleme (`islemKomut_`), LLM sonuçlarını cevaba birleştirme (`islemSonuclariniBirlestir_`) |
 | `Main.js`                 | `update_id` dedup (`isYeniUpdate_`), `doPost` webhook giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil`     |
 | `Queue.js`                | Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (`kuyrugaEkle_`, `telegram_queue` sekmesi)                        |
