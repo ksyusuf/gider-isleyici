@@ -20,11 +20,11 @@
  * sözleşmedir — bunlara ASLA dokunulmaz/yeniden sıralanmaz.** E:K kolonları
  * (2026-09-26'da eklendi) gider-isleyici'nin KENDİ retry bookkeeping'idir
  * (bkz. Retry.js) — Fitness bunları hiç okumaz/kullanmaz, sadece kuyrugaEkle_
- * her mesaj için A:D'yi doldurup E:K'yı boş bırakır; bir mesaj Gemini'de
+ * her mesaj için A:D'yi doldurup E:K'yı boş bırakır; bir mesaj LLM'de
  * başarısız olursa Retry.js AYNI satırı update_id ile bulup E:K'yı sonradan
  * doldurur (yeni bir satır EKLEMEZ). Bu yüzden bu sekmedeki HER satır bir
  * retry-takip kaydı DEĞİLDİR — durum (E) sütunu boşsa o mesaj ya normal
- * işlendi ya da hiç Gemini'ye gitmedi (komut vb.).
+ * işlendi ya da hiç LLM'e gitmedi (komut vb.).
  *
  * İlgili diğer dosyalar:
  *   - Expenses.js: getTargetSpreadsheet_ (test/prod spreadsheet seçimi, kuyruk da aynı spreadsheet'i kullanır)
@@ -96,12 +96,12 @@ function getOrCreateQueueSheet_() {
  * Fitness projesi kendi mevcut off/blok filtresiyle (tekMesajiIsle) kendine
  * ait olmayan mesajları zaten sessizce eliyor.
  *
- * Hata durumunda ana harcama akışını (Gemini çağrısı, Telegram cevabı) ASLA
+ * Hata durumunda ana harcama akışını (LLM çağrısı, Telegram cevabı) ASLA
  * bozmaz — sadece loglanır. Kuyruk yazımı bu proje için yan etkidir, kritik
  * değildir; doPost'un kendi işini tamamlaması her zaman önceliklidir.
  *
  * Bu çağrı SADECE A:D'yi doldurur (E:K, yani retry bookkeeping, bilerek boş
- * bırakılır) — mesaj Gemini'de başarısız olursa Retry.js bu AYNI satırı
+ * bırakılır) — mesaj LLM'de başarısız olursa Retry.js bu AYNI satırı
  * update_id ile bulup E:K'yı sonradan doldurur, yeni bir satır EKLEMEZ.
  * `messageId` (Telegram `update.message.message_id` — `update_id`'den FARKLI
  * bir alan) ayrıca L kolonuna yazılır; `/sonmesajisil` komutunun Telegram
@@ -113,8 +113,8 @@ function getOrCreateQueueSheet_() {
  * bu, hem `RETRY_TEMIZLIK_ESIK_MS`'i aşan (ve retry'a hiç girmemiş/TAMAMLANDI)
  * satırların FIFO temizliğinin HEM de sahipsiz kalmış (artık hiçbir satırın
  * işaret etmediği) trigger'ların temizliğinin HER mesajda bir fırsat
- * bulmasını sağlar. Aksi halde bu bakım SADECE bir Gemini hatası olduğunda
- * tetiklenirdi — Gemini hiç hata vermezse hiç çalışmazdı (2026-09-26/
+ * bulmasını sağlar. Aksi halde bu bakım SADECE bir LLM hatası olduğunda
+ * tetiklenirdi — LLM hiç hata vermezse hiç çalışmazdı (2026-09-26/
  * 2026-09-29 kararları, bkz. RetryCore.js dosya başı yorumu).
  * @param {number} updateId
  * @param {number|string} chatId

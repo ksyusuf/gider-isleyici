@@ -1,28 +1,37 @@
 /**
  * ============================================================================
- * Gider İşleyici — Gemini API Entegrasyonu + Katman 1 (Senkron) Tekrar Deneme
+ * Gider İşleyici — LLM Entegrasyonu (sağlayıcıdan bağımsız) + Katman 1 Tekrar Deneme
  * ============================================================================
- * Gemini generateContent REST çağrısı, mesaj zamanına göre dinamik kurulan
- * systemInstruction, Gemini geçici hatalarına karşı senkron tekrar deneme
- * (Katman 1) ve Gemini'nin döndürdüğü function call'ları çalıştıran dispatch
- * mantığı burada tutulur.
+ * Sağlayıcıdan bağımsız çekirdek: mesaj zamanına göre dinamik kurulan
+ * systemInstruction, LLM geçici hatalarına karşı senkron tekrar deneme
+ * (Katman 1), hata sınıflandırma ve LLM'in döndürdüğü function call'ları
+ * çalıştıran dispatch mantığı burada tutulur. Sağlayıcıya özgü HTTP/format
+ * kodu adaptör dosyalarındadır (şimdilik LLMGroq.js) ve yanıtı ortak
+ * `parts` biçimine normalize eder: [{functionCall:{name,args}} | {text}].
+ *
+ * PROD / TEST profilleri: CONFIG.llm.prod (doPost ve retry akışı) ve
+ * CONFIG.llm.test (yalnızca LLMTest.js'teki elle çalıştırılan test
+ * fonksiyonları). Bkz. Config.js > llmProfilOku_.
  *
  * İlgili diğer dosyalar:
- *   - Config.js: CONFIG, TIME_ZONE, KATEGORILER, TOOLS (Gemini function declarations)
+ *   - Config.js: CONFIG (llm profilleri), TIME_ZONE, KATEGORILER, TOOLS
+ *   - LLMGroq.js: Groq adaptörü (llmSaglayici_("groq"))
+ *   - LLMTest.js: yan etkisiz API test fonksiyonları (TEST profili)
  *   - Expenses.js: harcamaEkle / taksitliHarcamaEkle / sonHarcamalariGetir / sonHarcamalariTopla (FUNCTION_MAP hedefleri)
  *   - Logging.js: log_ / logHata_
  *   - Telegram.js: islemSonuclariniBirlestir_ (bu dosyadaki calistirFonksiyon_'u kullanır)
  *   - Main.js: doPost (mesajiIsleVeYanitla_'yı ilk/canlı denemede çağırır)
  *   - retry/RetryCore.js: zamanlanmisTekrarDenemeyiIsle (mesajiIsleVeYanitla_'yı
- *     gecikmeli denemede çağırır) — Gemini çağırma/fonksiyon çalıştırma/cevap
+ *     gecikmeli denemede çağırır) — LLM çağırma/fonksiyon çalıştırma/cevap
  *     birleştirme mantığı iki yerde ayrı ayrı yazılmaz, hep buradan geçer.
  */
 
+
 // ============================================================================
-// FUNCTION_MAP — Gemini fonksiyon dispatch
+// FUNCTION_MAP — LLM fonksiyon dispatch
 // ============================================================================
 
-/** Gemini'nin döndürdüğü fonksiyon adını (bkz. Expenses.js) gerçek implementasyona eşler. */
+/** LLM'in döndürdüğü fonksiyon adını (bkz. Expenses.js) gerçek implementasyona eşler. */
 const FUNCTION_MAP = {
   harcamaEkle: harcamaEkle,
   taksitliHarcamaEkle: taksitliHarcamaEkle,
@@ -31,7 +40,7 @@ const FUNCTION_MAP = {
 };
 
 /**
- * Tek bir Gemini functionCall part'ını çalıştırır. Hata durumunda batch'in
+ * Tek bir functionCall part'ını çalıştırır. Hata durumunda batch'in
  * geri kalanını etkilememesi için hatayı kullanıcıya dönecek bir metne çevirir.
  * @param {{name:string, args:Object}} functionCall
  * @return {string}
@@ -66,11 +75,11 @@ function calistirFonksiyon_(functionCall) {
 }
 
 // ============================================================================
-// Gemini REST entegrasyonu
+// systemInstruction
 // ============================================================================
 
 /**
- * Gemini'ye gönderilen systemInstruction şablonu. {ZAMAN_BAGLAMI} her istekte
+ * LLM'e gönderilen systemInstruction şablonu. {ZAMAN_BAGLAMI} her istekte
  * mesajın Telegram'a gönderildiği ana göre doldurulur — göreceli tarih
  * ifadeleri ("dün", "bugün" vb.) script'in çalıştığı ana göre DEĞİL, mesajın
  * gönderildiği ana göre çözülmelidir.
@@ -242,115 +251,94 @@ function buildSystemInstruction_(mesajZamani) {
   ).replace("{KATEGORI_TANIMLARI}", buildKategoriTanimlariBlok_());
 }
 
+// ============================================================================
+// LLM sağlayıcı çağrısı (adaptör dispatch)
+// ============================================================================
+
 /**
- * Gemini generateContent REST endpoint'ine tools + systemInstruction ile istek atar.
+ * Kayıtlı sağlayıcı adaptörleri (ad → adaptör). Her adaptör:
+ *   istekGonder(profil, systemMetni, userText) → parts dizisi (ortak biçim);
+ *   hata durumunda `httpStatus`/`httpBody` set edilmiş Error fırlatır (ve
+ *   gerekirse `tekrarDenenebilir` işareti, bkz. hataGeciciMi_).
+ * Yeni bir sağlayıcı eklemek = yeni adaptör dosyası + buraya kayıt.
+ */
+function llmSaglayici_(ad) {
+  // Fonksiyon (const değil): adaptör dosyası bu dosyadan SONRA yüklenirse bile
+  // çağrı anında çözülür — dosya yükleme sırasına bağımlılık yok.
+  var kayit = {
+    groq: { istekGonder: groqIstekGonder_, modelleriListele: groqModelleriListele_ },
+  };
+  return kayit[ad];
+}
+
+/**
+ * Profildeki sağlayıcıyla istek atar. `profil` = CONFIG.llm.prod | CONFIG.llm.test.
+ * @param {{provider:string, apiKey:string, model:string}} profil
  * @param {string} userText Kullanıcının Telegram mesaj metni.
  * @param {number} [mesajZamaniSaniye] Telegram update.message.date (Unix saniye).
  *   Verilmezse script'in çalıştığı an kullanılır (yalnızca yedek/geriye dönük durum).
- * @return {Array<Object>} candidates[0].content.parts dizisi.
+ * @return {Array<Object>} Ortak `parts` dizisi.
  */
-function callGemini_(userText, mesajZamaniSaniye) {
+function llmCagir_(profil, userText, mesajZamaniSaniye) {
+  var saglayici = llmSaglayici_(profil.provider);
+  if (!saglayici) {
+    throw new Error("Bilinmeyen LLM sağlayıcısı: " + profil.provider);
+  }
+  if (!profil.apiKey || !profil.model) {
+    throw new Error(
+      "LLM profili eksik: API_KEY ve MODEL Script Property'leri tanımlı olmalı.",
+    );
+  }
   var mesajZamani = mesajZamaniSaniye
     ? new Date(mesajZamaniSaniye * 1000)
     : new Date();
-
-  var url =
-    "https://generativelanguage.googleapis.com/v1beta/models/" +
-    CONFIG.geminiModel +
-    ":generateContent?key=" +
-    CONFIG.geminiApiKey;
-
-  var requestBody = {
-    contents: [{ role: "user", parts: [{ text: userText }] }],
-    tools: [{ functionDeclarations: TOOLS }],
-    toolConfig: { functionCallingConfig: { mode: "AUTO" } },
-    systemInstruction: {
-      role: "system",
-      parts: [{ text: buildSystemInstruction_(mesajZamani) }],
-    },
-  };
-
-  // NOT: `url` API key içeriyor — asla loglanmaz.
-  log_("gemini.istek", {
-    model: CONFIG.geminiModel,
-    mesajZamani: Utilities.formatDate(
-      mesajZamani,
-      TIME_ZONE,
-      "yyyy-MM-dd HH:mm:ss",
-    ),
+  // NOT: profil.apiKey asla loglanmaz.
+  log_("llm.istek", {
+    saglayici: profil.provider,
+    model: profil.model,
+    mesajZamani: Utilities.formatDate(mesajZamani, TIME_ZONE, "yyyy-MM-dd HH:mm:ss"),
     metin: userText,
   });
-
-  var t0 = Date.now();
-  var response = UrlFetchApp.fetch(url, {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify(requestBody),
-    muteHttpExceptions: true,
-  });
-  var sureMs = Date.now() - t0;
-
-  var statusCode = response.getResponseCode();
-  var govde = response.getContentText();
-  log_("gemini.yanit", { http: statusCode, sureMs: sureMs, govde: govde });
-
-  if (statusCode !== 200) {
-    var httpHata = new Error(
-      "Gemini API hatası (HTTP " + statusCode + "): " + govde,
-    );
-    httpHata.httpStatus = statusCode; // hataGeciciMi_'nin geçici/kalıcı ayrımı için
-    httpHata.httpBody = govde; // hataYuksekTalepMi_'nin "UNAVAILABLE" tespiti için
-    throw httpHata;
-  }
-
-  var json = JSON.parse(govde);
-  var candidate = json.candidates && json.candidates[0];
-  if (!candidate || !candidate.content || !candidate.content.parts) {
-    // Güvenlik filtresi ya da boş yanıt burada yakalanır; promptFeedback
-    // genellikle sebebi söyler.
-    log_("gemini.bos-yanit", {
-      promptFeedback: json.promptFeedback,
-      candidates: json.candidates,
-    });
-    // NOT: ham `govde` kasıtlı olarak mesaja eklenmiyor (kullaniciyaGosterilecekHataMetni_
-    // httpStatus'u olmayan hataları olduğu gibi gösterir) — detay zaten yukarıdaki
-    // log_ çağrısıyla loglandı.
-    throw new Error("Gemini API beklenmeyen bir yanıt döndürdü.");
-  }
-
-  log_("gemini.finishReason", candidate.finishReason);
+  var parts = saglayici.istekGonder(
+    profil,
+    buildSystemInstruction_(mesajZamani),
+    userText,
+  );
   log_(
-    "gemini.parts",
-    candidate.content.parts.map(function (part) {
+    "llm.parts",
+    parts.map(function (part) {
       return part.functionCall
         ? { fonksiyon: part.functionCall.name, args: part.functionCall.args }
         : { text: part.text };
     }),
   );
-
-  return candidate.content.parts;
+  return parts;
 }
 
+
 /** Katman 1 (senkron) tekrar deneme parametreleri. */
-const GEMINI_MAX_DENEME = 3;
-const GEMINI_RETRY_GECIKMELER_MS = [2000, 5000]; // 3 deneme arası: 2sn, 5sn bekleme
-const GEMINI_KALICI_HTTP_KODLARI = [400, 401, 403, 404];
+const LLM_MAX_DENEME = 3;
+const LLM_RETRY_GECIKMELER_MS = [2000, 5000]; // 3 deneme arası: 2sn, 5sn bekleme
+const LLM_KALICI_HTTP_KODLARI = [400, 401, 403, 404];
 
 /**
- * Bir Gemini hatasının GEÇİCİ (retry'a değer) mi yoksa KALICI (retry asla
+ * Bir LLM hatasının GEÇİCİ (retry'a değer) mi yoksa KALICI (retry asla
  * düzeltmez) mi olduğuna karar verir. BLACKLIST mantığı: sadece
- * GEMINI_KALICI_HTTP_KODLARI'nda listelenen HTTP durumları kalıcı sayılır;
+ * LLM_KALICI_HTTP_KODLARI'nda listelenen HTTP durumları kalıcı sayılır;
  * ağ hatası, boş/beklenmeyen yanıt ya da bilinmeyen bir durum kodu dahil geri
  * kalan HER ŞEY varsayılan olarak GEÇİCİ kabul edilir. Bu, kullanıcının
- * "Gemini'nin veriyi yorumlayamaması DIŞINDA hiçbir şey için elle tekrar
+ * "LLM'in veriyi yorumlayamaması DIŞINDA hiçbir şey için elle tekrar
  * göndermek istemiyorum" isteğiyle uyumlu — yorumlayamama zaten bir exception
  * değil, ayrı ve değişmeyen bir akıştır (bkz. Telegram.js > islemSonuclariniBirlestir_).
  * @param {Error} err
  * @return {boolean}
  */
 function hataGeciciMi_(err) {
+  if (err && err.tekrarDenenebilir === true) {
+    return true; // adaptör açıkça işaretledi (örn. Groq 400 tool_use_failed)
+  }
   if (err && typeof err.httpStatus === "number") {
-    return GEMINI_KALICI_HTTP_KODLARI.indexOf(err.httpStatus) === -1;
+    return LLM_KALICI_HTTP_KODLARI.indexOf(err.httpStatus) === -1;
   }
   return true;
 }
@@ -359,43 +347,27 @@ function hataGeciciMi_(err) {
  * Katman 1'in hızlı (saniyeler içinde) tekrar denemesinin ANLAMSIZ olduğu,
  * sebebi zaten KESİN bilinen iki durumu tespit eder — ikisinde de doğrudan
  * Katman 2'ye (saatlik trigger) geçilir, kalan hızlı deneme hakları harcanmaz:
- *   (a) "Yüksek talep" — gövdede `error.status === "UNAVAILABLE"`, örnek:
- *       `{"error":{"code":503,"message":"This model is currently experiencing
- *       high demand...","status":"UNAVAILABLE"}}`. Model o an meşgul, birkaç
+ *   (a) "Yüksek talep/kapasite" — `httpStatus === 503` (model o an
+ *       meşgul/aşırı yüklü, "over capacity" / "high demand"). Birkaç
  *       saniye arayla tekrar denemek durumu değiştirmez (sorun saatler
  *       sürebiliyor, bkz. CLAUDE.md test notları).
  *   (b) "Kota/rate-limit doldu" — `httpStatus === 429`. Kota zaten dolu
  *       durumdayken hemen tekrar istek atmak sorunu ÇÖZMEK yerine kotayı daha
  *       da zorlar (2026-09-29, prod'da gözlemlendi) — bu yüzden gövdeye hiç
  *       bakılmadan doğrudan true döner.
- * Gövde parse edilemezse (beklenmeyen format) güvenli tarafta kalınıp false
- * döner — normal Katman 1 akışı işler.
+ * Sağlayıcıdan bağımsızdır: yalnızca HTTP durum koduna bakar.
  * @param {Error} err
  * @return {boolean}
  */
 function hataYuksekTalepMi_(err) {
-  if (!err) {
-    return false;
-  }
-  if (err.httpStatus === 429) {
-    return true;
-  }
-  if (typeof err.httpBody !== "string") {
-    return false;
-  }
-  try {
-    var json = JSON.parse(err.httpBody);
-    return !!(json && json.error && json.error.status === "UNAVAILABLE");
-  } catch (parseErr) {
-    return false;
-  }
+  return !!err && (err.httpStatus === 429 || err.httpStatus === 503);
 }
 
 /**
  * Kullanıcıya (ve Sheets'teki `son_hata_mesaji` sütununa — bu da
  * `/pesedilenler` üzerinden Telegram'a dökülüyor) gösterilecek, HAM JSON
  * gövdesi İÇERMEYEN kısa bir Türkçe açıklama üretir. Ham `err.message`
- * (Gemini'nin `{"error":{...}}` gövdesini birebir içerir) doğrudan
+ * (Sağlayıcının `{"error":{...}}` gövdesini birebir içerir) doğrudan
  * kullanıcıya gösterilmez — teşhis için ham hata `logHata_` ile loglanmaya
  * devam eder, SADECE kullanıcı yüzeyine giden metin buradan geçirilir.
  * @param {Error} err
@@ -407,30 +379,30 @@ function kullaniciyaGosterilecekHataMetni_(err) {
   }
   if (hataYuksekTalepMi_(err)) {
     return err.httpStatus === 429
-      ? "Gemini API kullanım kotası doldu (çok fazla istek gönderildi)."
-      : "Gemini şu an yoğun (yüksek talep).";
+      ? "Yapay zeka servisi kullanım kotası doldu (çok fazla istek gönderildi)."
+      : "Yapay zeka servisi şu an yoğun (yüksek talep).";
   }
   if (typeof err.httpStatus === "number") {
-    // Bu noktaya gelen err HER ZAMAN callGemini_'nin HTTP-durumu dalından
-    // gelir ve `.message` ham Gemini JSON gövdesini içerir — asla olduğu
+    // Bu noktaya gelen err HER ZAMAN llmCagir_'nin HTTP-durumu dalından
+    // gelir ve `.message` ham sağlayıcı JSON gövdesini içerir — asla olduğu
     // gibi gösterilmez.
-    if (GEMINI_KALICI_HTTP_KODLARI.indexOf(err.httpStatus) !== -1) {
+    if (LLM_KALICI_HTTP_KODLARI.indexOf(err.httpStatus) !== -1) {
       return (
-        "Gemini isteği reddetti (HTTP " +
+        "Yapay zeka servisi isteği reddetti (HTTP " +
         err.httpStatus +
         ") — bu genellikle API key ya da istek biçimiyle ilgili kalıcı bir sorundur."
       );
     }
-    return "Gemini API hatası (HTTP " + err.httpStatus + ").";
+    return "Yapay zeka servisi hatası (HTTP " + err.httpStatus + ").";
   }
-  // httpStatus yok: ya callGemini_'nin "beklenmeyen yanıt" dalı (artık ham
+  // httpStatus yok: ya llmCagir_'nin "beklenmeyen yanıt" dalı (artık ham
   // gövde içermiyor) ya da kodun kendi ürettiği, zaten okunur bir Türkçe
   // hata mesajı (örn. kuyruklama/trigger hatası) — olduğu gibi gösterilir.
   return err.message || "Beklenmeyen bir hata oluştu.";
 }
 
 /**
- * callGemini_'yi en fazla maxDeneme kez dener. Kalıcı bir hata alınırsa deneme
+ * llmCagir_'yi en fazla maxDeneme kez dener. Kalıcı bir hata alınırsa deneme
  * hakkı harcamadan hemen fırlatır. "Yüksek talep" (hataYuksekTalepMi_) tespit
  * edilirse de aynı şekilde hemen çıkılır — sebep zaten bilindiği için hızlı
  * tekrar denemeler anlamsızdır, doğrudan Katman 2'ye devredilir. Diğer geçici
@@ -443,9 +415,9 @@ function kullaniciyaGosterilecekHataMetni_(err) {
  * @param {number} mesajZamaniSaniye
  * @param {number} maxDeneme
  * @param {Array<number>} gecikmelerMs maxDeneme-1 uzunluğunda, denemeler arası bekleme (ms).
- * @return {Array<Object>} candidates[0].content.parts dizisi.
+ * @return {Array<Object>} Ortak `parts` dizisi.
  */
-function callGeminiIleTekrarDeneme_(
+function llmIleTekrarDeneme_(
   userText,
   mesajZamaniSaniye,
   maxDeneme,
@@ -454,20 +426,20 @@ function callGeminiIleTekrarDeneme_(
   var sonHata;
   for (var i = 0; i < maxDeneme; i++) {
     try {
-      return callGemini_(userText, mesajZamaniSaniye);
+      return llmCagir_(CONFIG.llm.prod, userText, mesajZamaniSaniye);
     } catch (err) {
       sonHata = err;
       if (!hataGeciciMi_(err)) {
         throw err; // kalıcı — deneme hakkı harcamadan hemen çık
       }
       if (hataYuksekTalepMi_(err)) {
-        log_("gemini.yuksek-talep-dogrudan-katman2", {
+        log_("llm.yuksek-talep-dogrudan-katman2", {
           deneme: i + 1,
           hata: err.message,
         });
         break; // sebep bilindiği için daha fazla hızlı deneme yapılmaz
       }
-      log_("gemini.tekrar-deneme", {
+      log_("llm.tekrar-deneme", {
         deneme: i + 1,
         maxDeneme: maxDeneme,
         hata: err.message,
@@ -482,22 +454,22 @@ function callGeminiIleTekrarDeneme_(
 }
 
 /**
- * Katman 1'in (callGeminiIleTekrarDeneme_) tüm denemeleri geçici bir hatayla
+ * Katman 1'in (llmIleTekrarDeneme_) tüm denemeleri geçici bir hatayla
  * tükendiğinde kullanıcıya gönderilen mesaj — mevcut generic "⚠️ Bir hata
  * oluştu" yerine, mesajın KAYBOLMADIĞINI ve otomatik tekrar denenecek
  * olduğunu açıkça belirtir.
  */
-const GEMINI_YOGUN_KULLANICI_MESAJI =
-  "⏳ Gemini API şu an yoğun ya da erişilemiyor. Mesajınız kaybolmadı — " +
+const LLM_YOGUN_KULLANICI_MESAJI =
+  "⏳ Yapay zeka servisi şu an yoğun ya da erişilemiyor. Mesajınız kaybolmadı — " +
   "otomatik olarak tekrar denenecek, sonucu ayrıca bildireceğim. Elle " +
   "tekrar göndermenize gerek yok.";
 
 /**
- * Bir kullanıcı mesajını uçtan uca işler: Gemini'yi (Katman 1 tekrar
+ * Bir kullanıcı mesajını uçtan uca işler: LLM'i (Katman 1 tekrar
  * denemeyle) çağırır, dönen fonksiyon çağrılarını çalıştırır, sonucu tek bir
  * Telegram cevap metnine birleştirir. `Main.js > doPost`'un ilk (canlı)
  * denemesi VE `retry/RetryCore.js > zamanlanmisTekrarDenemeyiIsle`'ın
- * gecikmeli denemeleri AYNI bu fonksiyonu kullanır — Gemini çağırma/fonksiyon
+ * gecikmeli denemeleri AYNI bu fonksiyonu kullanır — LLM çağırma/fonksiyon
  * çalıştırma/cevap birleştirme mantığı iki yerde ayrı ayrı yazılmaz. Hata
  * durumunda (geçici ya da kalıcı) olduğu gibi fırlatır; Telegram'a ne
  * gönderileceğine çağıran karar verir.
@@ -506,11 +478,11 @@ const GEMINI_YOGUN_KULLANICI_MESAJI =
  * @return {string}
  */
 function mesajiIsleVeYanitla_(text, mesajZamaniSaniye) {
-  var parts = callGeminiIleTekrarDeneme_(
+  var parts = llmIleTekrarDeneme_(
     text,
     mesajZamaniSaniye,
-    GEMINI_MAX_DENEME,
-    GEMINI_RETRY_GECIKMELER_MS,
+    LLM_MAX_DENEME,
+    LLM_RETRY_GECIKMELER_MS,
   );
   return islemSonuclariniBirlestir_(parts);
 }

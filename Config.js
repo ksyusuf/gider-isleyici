@@ -1,25 +1,43 @@
 /**
  * ============================================================================
- * Gider İşleyici — Konfigürasyon ve Gemini Tool Şeması
+ * Gider İşleyici — Konfigürasyon ve LLM Tool Şeması
  * ============================================================================
  * Sır/ortam bilgileri (CONFIG), sheet düzeni sabitleri (SHEET_LAYOUT), sabit
- * harcama kategorileri (KATEGORILER) ve Gemini'ye gönderilen function-calling
+ * harcama kategorileri (KATEGORILER) ve LLM'e gönderilen function-calling
  * şemaları (TOOLS) burada tutulur.
  *
  * İlgili diğer dosyalar:
  *   - Expenses.js: Sheets erişim yardımcıları + harcamaEkle / sonHarcamalariGetir / sonHarcamalariTopla
- *   - Main.js: Gemini/Telegram entegrasyonu, doPost giriş noktası, FUNCTION_MAP
+ *   - Main.js: doPost giriş noktası; LLM.js: FUNCTION_MAP, LLM entegrasyonu
  */
 
 // ============================================================================
 // CONFIG / SHEET_LAYOUT
 // ============================================================================
 
+/**
+ * Bir LLM profilini Script Properties'ten okur. Öneke göre:
+ * <ONEK>_PROVIDER (varsayılan "groq"), <ONEK>_API_KEY, <ONEK>_MODEL.
+ * Model adı kodda sabit DEĞİL — değiştirmek için redeploy gerekmez.
+ * @param {string} onek "LLM_PROD" | "LLM_TEST"
+ * @return {{provider:string, apiKey:?string, model:?string}}
+ */
+function llmProfilOku_(onek) {
+  var p = PropertiesService.getScriptProperties();
+  return {
+    provider: p.getProperty(onek + "_PROVIDER") || "groq",
+    apiKey: p.getProperty(onek + "_API_KEY"),
+    model: p.getProperty(onek + "_MODEL"),
+  };
+}
+
 /** Sır/ortam bilgileri — asla kod içine sabit yazılmaz, Script Properties'ten okunur. */
 const CONFIG = {
-  geminiApiKey:
-    PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY"),
-  geminiModel: "gemini-3.5-flash",
+  // LLM profilleri: prod (doPost + retry akışı) ve test (yalnızca LLMTest.js).
+  llm: {
+    prod: llmProfilOku_("LLM_PROD"),
+    test: llmProfilOku_("LLM_TEST"),
+  },
   telegramToken:
     PropertiesService.getScriptProperties().getProperty("TELEGRAM_TOKEN"),
   chatId: PropertiesService.getScriptProperties().getProperty("CHAT_ID"),
@@ -66,7 +84,7 @@ const SHEET_LAYOUT = {
  * üretilir, aksi halde iki yerde tutulan tanımlar zamanla birbirinden sapar.
  *
  * - `ad`: kanonik görünen isim; `harfBuyukYap_`'ın (Expenses.js) üreteceği
- *   tam title-case biçimde yazılır — hem Gemini enum üyesi hem de sheet'e
+ *   tam title-case biçimde yazılır — hem LLM enum üyesi hem de sheet'e
  *   yazılacak literal TÜR değeri budur.
  * - `anahtar`: ASCII büyük-harf-alt-tire kimlik; bugün kullanılmıyor ama
  *   ileride bir `BUTCE_<KATEGORI>` Script Property anahtarı olarak
@@ -208,11 +226,11 @@ const KATEGORILER = [
 ];
 
 // ============================================================================
-// TOOLS — Gemini function declarations
+// TOOLS — LLM function declarations
 // ============================================================================
 
 /**
- * Gemini'ye her istekte gönderilen fonksiyon şemaları. Her parametrenin
+ * LLM'e her istekte gönderilen fonksiyon şemaları. Her parametrenin
  * description'ı, Main.js'teki systemInstruction'daki kurallarla kasıtlı
  * olarak örtüşür (çift katman: tek başına systemInstruction'a güvenilmez).
  */
@@ -333,7 +351,8 @@ const TOOLS = [
         },
         malzeme: {
           type: "STRING",
-          description: "Satın alınan somut ürün/malzeme adı (varsa). Opsiyonel.",
+          description:
+            "Satın alınan somut ürün/malzeme adı (varsa). Opsiyonel.",
         },
         aciklama: {
           type: "STRING",

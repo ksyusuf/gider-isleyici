@@ -1,7 +1,7 @@
 # gider-isleyici — Telegram Harcama Botu
 
 `gider-isleyici`, Google Apps Script tabanlı bir Telegram harcama botudur.
-Telegram'a Türkçe doğal dille yazılan harcama mesajları Gemini function
+Telegram'a Türkçe doğal dille yazılan harcama mesajları LLM (Groq) function
 calling ile ayrıştırılıp, bu Apps Script projesinin bağlı olduğu Google
 Sheets tablosuna doğrudan yazılır.
 
@@ -12,7 +12,10 @@ ekleyin:
 
 | Anahtar               | Zorunlu                       | Açıklama                                                                                                                                                |
 | --------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GEMINI_API_KEY`      | ✅                            | Google AI Studio / Gemini API anahtarı                                                                                                                  |
+| `LLM_PROD_API_KEY`    | ✅                            | Prod LLM (Groq) API anahtarı — `doPost` ve retry akışı bunu kullanır                                                                                    |
+| `LLM_PROD_MODEL`      | ✅                            | Prod model adı (örn. `openai/gpt-oss-20b`); hesabın erişebildiği adlar için `llmModelleriListele()`                                                     |
+| `LLM_PROD_PROVIDER`   | opsiyonel                     | Sağlayıcı adaptörü; varsayılan `groq`                                                                                                                   |
+| `LLM_TEST_API_KEY` / `LLM_TEST_MODEL` / `LLM_TEST_PROVIDER` | test için | Aynı üçlü, yalnızca `llmTest()` / `llmModelleriListele()` (LLMTest.js) için; prod akışına dokunmaz                                     |
 | `TELEGRAM_TOKEN`      | ✅                            | BotFather'dan alınan bot token'ı                                                                                                                        |
 | `CHAT_ID`             | önerilir                      | Botu kullanacak kişinin Telegram chat id'si. Boş bırakılırsa **herkes** webhook URL'ine mesaj gönderip botu kullanabilir                                |
 | `TEST_MODE`           | opsiyonel                     | `"true"` verilirse prod tablo yerine `TEST_SPREADSHEET_ID` kullanılır                                                                                   |
@@ -103,14 +106,16 @@ bir alt dizin olsa da bunu değiştirmez — clasp `rootDir: ""` +
 
 | Dosya                     | İçerik                                                                                                                 |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `Config.js`               | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (Gemini function declarations)                                          |
+| `Config.js`               | `CONFIG`, `TIME_ZONE`, `SHEET_LAYOUT`, `TOOLS` (LLM function declarations)                                          |
 | `Expenses.js`             | Sheets D:I yazma/okuma/sıralama yardımcıları + `harcamaEkle` / `sonHarcamalariGetir` / `sonHarcamalariTopla`           |
 | `Logging.js`              | Ortak loglama (`log_`, `logHata_`)                                                                                     |
-| `Gemini.js`                | `FUNCTION_MAP`, Gemini REST entegrasyonu (v1beta `generateContent`, function calling), Katman 1 (senkron) tekrar deneme, `mesajiIsleVeYanitla_` |
-| `Telegram.js`             | Telegram gönderim (`sendTelegramMessage_`), `/` komut işleme (`islemKomut_`), Gemini sonuçlarını cevaba birleştirme (`islemSonuclariniBirlestir_`) |
+| `LLM.js`                  | `FUNCTION_MAP`, sağlayıcıdan bağımsız LLM çekirdeği (systemInstruction, Katman 1 tekrar deneme, hata sınıflandırma, `mesajiIsleVeYanitla_`) |
+| `LLMGroq.js`              | Groq adaptörü (OpenAI uyumlu `chat/completions`; yanıtı ortak `parts` biçimine normalize eder)                          |
+| `LLMTest.js`              | Yan etkisiz API testi: `llmTest()`, `llmModelleriListele()` (TEST profili)                                              |
+| `Telegram.js`             | Telegram gönderim (`sendTelegramMessage_`), `/` komut işleme (`islemKomut_`), LLM sonuçlarını cevaba birleştirme (`islemSonuclariniBirlestir_`) |
 | `Main.js`                 | `update_id` dedup (`isYeniUpdate_`), `doPost` webhook giriş noktası, `kurulumWebhook`/`webhookDurumu`/`webhookSil`     |
 | `Queue.js`                | Fitness projesiyle paylaşılan Telegram mesaj kuyruğu (`kuyrugaEkle_`, `telegram_queue` sekmesi)                        |
-| `retry/RetryCore.js`      | Gemini geçici/kalıcı hatalarında Katman 2 — otomatik motor: mesaj bazlı, tek seferlik trigger'larla dakika/saat ölçekli tekrar deneme (`telegram_queue` sekmesinin E:L kolonları) |
+| `retry/RetryCore.js`      | LLM geçici/kalıcı hatalarında Katman 2 — otomatik motor: mesaj bazlı, tek seferlik trigger'larla dakika/saat ölçekli tekrar deneme (`telegram_queue` sekmesinin E:L kolonları) |
 | `retry/RetryCommands.js`  | Katman 2'nin manuel komut yüzeyi (`/pesedilenler`, `/pesdene`), teşhis: `yenidenDenemeKuyruguDurumu()`                 |
 
 ## Sheets sütun sözleşmesi

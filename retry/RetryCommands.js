@@ -14,7 +14,7 @@
  *   - retry/RetryCore.js: RETRY_DURUM, kuyrukTumSatirlariOku_, satiriGuncelle_,
  *     zamanliTetikleyiciSil_, gecenSureyiIfadeEt_, RETRY_HANDLER_FN_ADI
  *   - Queue.js: getOrCreateQueueSheet_
- *   - Gemini.js: mesajiIsleVeYanitla_ (SADECE pesEdilenleriTekrarDene_ tarafından
+ *   - LLM.js: mesajiIsleVeYanitla_ (SADECE pesEdilenleriTekrarDene_ tarafından
  *     çağrılır) / kullaniciyaGosterilecekHataMetni_
  *   - Telegram.js: islemKomut_ (`/pesedilenler`/`/pesdene`/`/sonmesajisil`
  *     komutlarını bu dosyadaki fonksiyonlara yönlendirir) / telegramAlinti_ /
@@ -24,7 +24,7 @@
 /**
  * `/pesedilenler` komutunun çıktısı: kuyruktaki TÜM `PES_EDILDI` satırlarını
  * (otomatik tekrar denemesi tükenmiş/kalıcı hatayla başarısız kalmış mesajlar)
- * okunabilir bir listeye çevirir. Gemini'ye hiç gitmez, tamamen deterministik.
+ * okunabilir bir listeye çevirir. LLM'e hiç gitmez, tamamen deterministik.
  * @return {string}
  */
 function pesEdilenleriListele_() {
@@ -66,8 +66,8 @@ function pesEdilenleriListele_() {
 
 /**
  * `/pesdene` komutunun çıktısı: kuyruktaki TÜM `PES_EDILDI` satırlarını, her
- * biri için Katman 1'i (Gemini.js > callGeminiIleTekrarDeneme_, en fazla
- * GEMINI_MAX_DENEME hızlı deneme) kullanarak ŞİMDİ topluca tekrar dener.
+ * biri için Katman 1'i (LLM.js > llmIleTekrarDeneme_, en fazla
+ * LLM_MAX_DENEME hızlı deneme) kullanarak ŞİMDİ topluca tekrar dener.
  * Katman 2'ye (yeni trigger kurma) HİÇ girmez — bu SADECE anlık, manuel bir
  * deneme; hâlâ başarısız kalanlar PES_EDILDI'de kalır (silinmez), sadece
  * `son_hata_mesaji`/`son_deneme_zamani` güncellenir. Başarılı olanlar

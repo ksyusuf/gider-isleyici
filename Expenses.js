@@ -3,13 +3,13 @@
  * Gider İşleyici — Harcama Verisi: Sheets Erişimi ve İş Mantığı
  * ============================================================================
  * Google Sheets D:I sütunlarına (TARİH, TUTAR, FİRMA, TÜR, MALZEME, AÇIKLAMA)
- * okuma/yazma yapan yardımcı fonksiyonlar ve Gemini'nin çağıracağı asıl iş
+ * okuma/yazma yapan yardımcı fonksiyonlar ve LLM'in çağıracağı asıl iş
  * mantığı fonksiyonları (harcamaEkle, sonHarcamalariGetir, sonHarcamalariTopla)
  * burada tutulur.
  *
  * İlgili diğer dosyalar:
- *   - Config.js: CONFIG, SHEET_LAYOUT, TOOLS (Gemini function declarations)
- *   - Main.js: Gemini/Telegram entegrasyonu, doPost giriş noktası, FUNCTION_MAP
+ *   - Config.js: CONFIG, SHEET_LAYOUT, TOOLS (LLM function declarations)
+ *   - Main.js: LLM/Telegram entegrasyonu, doPost giriş noktası, FUNCTION_MAP
  */
 
 // ============================================================================
@@ -410,7 +410,7 @@ function sonHarcamalariTopla(args) {
  * ilgili ayın aynı gününde (ay sonu çakışmasında `ayEkle_` ile o ayın son
  * gününe çekilir) ve açıklamasında "k/N" etiketiyle yazılır. Taksit
  * matematiği (tutar bölme, tarih hesaplama, numaralandırma) KASITLI olarak
- * kodda yapılır, Gemini'ye bırakılmaz — modelin çok adımlı aritmetikte
+ * kodda yapılır, LLM'e bırakılmaz — modelin çok adımlı aritmetikte
  * (N kez ay ekleme, doğru sıralama) hata yapma riski yüksektir.
  * @param {{tutar:number, tutarTipi:string, taksitSayisi:number, kategori:string, ilkTarih?:string, firma?:string, malzeme?:string, aciklama?:string}} args
  * @return {string} Tüm taksitleri özetleyen TEK bir onay metni.
