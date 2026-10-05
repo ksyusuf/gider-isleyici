@@ -123,6 +123,48 @@ const KOMUT_LISTESI_METNI = [
   "/pesdene — pes edilmiş TÜM mesajları şimdi topluca tekrar dener.",
   "/sonmesajisil — bir önceki mesajınızı Telegram'dan silmeyi dener ve varsa otomatik tekrar deneme kaydını iptal eder.",
   "/komutlar — bu listeyi gösterir.",
+  "",
+  // Bilerek backtick içinde: Telegram metindeki `/spor` kalıbını tıklanabilir
+  // komuta çevirir, yanlışlıkla boş `/spor` gönderilmesin diye code span'e alınır.
+  "🏋️ Spor verisi girmek için mesajı komutla başlat (tek satır): `/spor off` veya `/spor yarın göğüs` — bot cevap vermez, Fitness bir sonraki çalışmasında işler.",
+].join("\n");
+
+/**
+ * Mesaj Fitness modülüne ait mi (`/spor ...`)? Bu mesajlar kuyruğa yazılır ama
+ * gider-isleyici tarafında ne LLM'e gider ne de cevaplanır (bkz. Main.js >
+ * doPost). Fitness tarafındaki eşleşme (Fitness/durumYonetimi.js >
+ * yeniTelegramMesajlariniGetir_) ile aynı kural olmalı.
+ * @param {string} text
+ * @return {boolean}
+ */
+function sporMesajiMi_(text) {
+  return /^\/spor(?:@\w+)?(\s|$)/i.test(String(text).trim());
+}
+
+/**
+ * `/spor` tek başına (argümansız) mı? Bu durumda Fitness'in işleyeceği bir
+ * içerik yoktur; kullanıcıya kullanım açıklaması gösterilir (bkz. Main.js).
+ * @param {string} text
+ * @return {boolean}
+ */
+function sporMesajiBosMu_(text) {
+  return /^\/spor(?:@\w+)?$/i.test(String(text).trim());
+}
+
+/**
+ * Argümansız `/spor`'a cevap. Komut örnekleri backtick içinde: Telegram
+ * çıplak `/spor` kalıbını tıklanabilir yapar, tıklanınca yine boş `/spor`
+ * gönderilirdi (bkz. KOMUT_LISTESI_METNI).
+ */
+const SPOR_KULLANIM_METNI = [
+  "🏋️ `/spor` komutu spor bildirimleri içindir (Fitness modülü).",
+  "",
+  "Komutun yanına aynı satırda bildirimini yaz:",
+  "• `/spor off` — bugün spor yok",
+  "• `/spor yarın göğüs` — yarın göğüs günü",
+  "• `/spor dün sırt, dizim ağrıyor` — geçmiş güne not ekle",
+  "",
+  "Gönderince bot cevap vermez; Fitness bir sonraki çalışmasında işler. `/spor` olmadan yazılan mesajlar harcama sayılır.",
 ].join("\n");
 
 /**

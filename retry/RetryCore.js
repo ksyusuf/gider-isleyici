@@ -119,8 +119,41 @@ const RETRY_LOCK_TIMEOUT_MS = 10000;
 /** Aynı anda birden fazla mesajın vadesi gelirse tek bir trigger ateşlenişinde işlenecek üst sınır. */
 const RETRY_MAX_SATIR_PER_TETIKLEME = 5;
 
+/**
+ * Trigger'ın "yaklaşık" ateşlenme sapması ve `sonraki_deneme_zamani`'nın trigger
+ * kurulduktan SONRA hesaplanması (birkaç saniye) yüzünden, trigger vadeden biraz
+ * ÖNCE ateşlenirse satır "henüz vadesi gelmedi" sayılıp tek seferlik trigger boşa
+ * harcanmasın diye vade kontrolüne eklenen tolerans (2026-10-05). En kısa aşama
+ * 10 dk olduğundan erken işleme riski yok.
+ */
+const RETRY_VADE_TOLERANSI_MS = 90 * 1000;
+
+/**
+ * `sonraki_deneme_zamani` bu süreden fazla geçmiş ama hâlâ BEKLIYOR olan satır
+ * "takılı" sayılır (trigger kaybolmuş/boşa harcanmış) ve PES_EDILDI'ye düşürülür
+ * — böylece `/pesedilenler` ile görünür olur (2026-10-05, bkz. CLAUDE.md).
+ */
+const RETRY_TAKILI_ESIK_MS = 15 * 60 * 1000;
+
 /** FIFO temizlik eşiği: `date`'ten itibaren bu süreyi aşan durum=""/TAMAMLANDI satırlar silinir. */
 const RETRY_TEMIZLIK_ESIK_MS = 10 * 24 * 60 * 60 * 1000; // 10 gün
+
+/**
+ * Script kilidini bırakmadan ÖNCE bekleyen sheet yazımlarını commit eder
+ * (`SpreadsheetApp.flush()`). Apps Script dokümantasyonu bunu açıkça gerektirir:
+ * flush edilmezse kilidi hemen ardından alan başka bir execution (örn. sweep,
+ * `sahipsizTetikleyicileriTemizle_`) satırdaki yeni `trigger_id`/`durum`
+ * değerini henüz göremeyip eski veriyle karar verebilir (2026-10-05).
+ * Tüm `releaseLock()` çağrıları bu yardımcı üzerinden yapılmalı.
+ * @param {GoogleAppsScript.Lock.Lock} lock
+ */
+function kilidiBirak_(lock) {
+  try {
+    SpreadsheetApp.flush();
+  } finally {
+    lock.releaseLock();
+  }
+}
 
 // ============================================================================
 // Kuyruk (telegram_queue, Queue.js) satır okuma/yazma yardımcıları
@@ -403,10 +436,93 @@ function bakimYapKilitli_(sheet) {
     logHata_("yenidenDeneme.bakim-kilit-alinamadi", err);
     return;
   }
+  var simdi = new Date();
+  var takililar = [];
   try {
-    bakimYap_(sheet, new Date());
+    bakimYap_(sheet, simdi);
+    takililar = takiliBekleyenleriPesEt_(sheet, simdi);
   } finally {
-    lock.releaseLock();
+    kilidiBirak_(lock);
+  }
+  // Bildirim (ağ çağrısı) kilit DIŞINDA.
+  takiliBekleyenleriBildir_(sheet, takililar);
+}
+
+/**
+ * Vadesi `RETRY_TAKILI_ESIK_MS`'den fazla geçmiş ama hâlâ BEKLIYOR olan
+ * ("takılı": trigger'ı silinmiş/boşa harcanmış, hiç tetiklenmeyecek) satırları
+ * PES_EDILDI'ye düşürür ve varsa ölü trigger'larını siler. Harcamanın sessizce
+ * unutulmaması içindir: PES_EDILDI satırlar `/pesedilenler` ile görünür,
+ * `/pesdene` ile tekrar denenebilir ve ASLA otomatik silinmez (2026-10-05).
+ * Ağ çağrısı YAPMAZ — çağıran kilidi tutmalı, bildirimi kilit dışında yollamalı
+ * (bkz. takiliBekleyenleriBildir_). Yeni trigger KURMAZ.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Date} simdi
+ * @return {Array<Object>} PES_EDILDI'ye düşürülen satırlar.
+ */
+function takiliBekleyenleriPesEt_(sheet, simdi) {
+  var donusenler = [];
+  kuyrukTumSatirlariOku_(sheet).forEach(function (row) {
+    if (row.durum !== RETRY_DURUM.BEKLIYOR) {
+      return;
+    }
+    var sonrakiMs =
+      row.sonrakiDenemeZamani instanceof Date
+        ? row.sonrakiDenemeZamani.getTime()
+        : new Date(row.sonrakiDenemeZamani).getTime();
+    if (isNaN(sonrakiMs) || sonrakiMs + RETRY_TAKILI_ESIK_MS >= simdi.getTime()) {
+      return;
+    }
+    try {
+      zamanliTetikleyiciSil_(row.triggerId);
+    } catch (err) {
+      logHata_("yenidenDeneme.takili-trigger-silinemedi", err);
+    }
+    var hata = "Otomatik tekrar deneme zamanında tetiklenmedi.";
+    satiriPesEdildiOlarakIsaretle_(sheet, row, hata, simdi);
+    log_("yenidenDeneme.takili-pes-edildi", {
+      updateId: row.updateId,
+      asama: row.denemeAsamasi,
+    });
+    donusenler.push(Object.assign({}, row, { sonHataMesaji: hata }));
+  });
+  return donusenler;
+}
+
+/**
+ * `takiliBekleyenleriPesEt_`'in döndürdüğü her satır için kullanıcıya mevcut
+ * PES_EDILDI bildirimini gönderir. Hata ana akışı bozmaz (sadece loglanır).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Array<Object>} satirlar
+ */
+function takiliBekleyenleriBildir_(sheet, satirlar) {
+  satirlar.forEach(function (row) {
+    try {
+      pesEdildiBildirimGonder_(sheet, row.chatId, row.text, row.sonHataMesaji, row.satirNo);
+    } catch (err) {
+      logHata_("yenidenDeneme.takili-bildirim-HATA", err);
+    }
+  });
+}
+
+/**
+ * Komutlardan (`/pesedilenler`, `/pesdene`) çağrılan kilitli sarmalayıcı:
+ * takılı BEKLIYOR satırları PES_EDILDI'ye düşürür (bildirim göndermez —
+ * komutun kendi çıktısı zaten listeler). Kilit alınamazsa sessizce atlanır.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ */
+function takiliBekleyenleriKilitliPesEt_(sheet) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(RETRY_LOCK_TIMEOUT_MS);
+  } catch (err) {
+    logHata_("yenidenDeneme.takili-kilit-alinamadi", err);
+    return;
+  }
+  try {
+    takiliBekleyenleriPesEt_(sheet, new Date());
+  } finally {
+    kilidiBirak_(lock);
   }
 }
 
@@ -599,7 +715,7 @@ function yenidenDenemeKuyruguEkle_(
         sonrakiDenemeZamani: sonrakiDenemeZamani,
       });
     } finally {
-      lock.releaseLock();
+      kilidiBirak_(lock);
     }
   } catch (yaziHatasi) {
     // Trigger BAŞARIYLA kuruldu ama satıra yazılamadı (kilit zaman aşımı,
@@ -682,7 +798,7 @@ function pesEdildiKuyruguEkleVeBildir_(
     }
     log_("yenidenDeneme.kalici-hata-kuyruklandi", { updateId: updateId, satirNo: satirNo });
   } finally {
-    lock.releaseLock();
+    kilidiBirak_(lock);
   }
 
   // Telegram gönderimi kilit DIŞINDA yapılır (ağ çağrısı kilit altında tutulmaz).
@@ -756,11 +872,12 @@ function zamanlanmisTekrarDenemeyiIsle() {
     return;
   }
 
-  var sheet, vadesiGelenler;
+  var sheet, vadesiGelenler, takililar;
   try {
     sheet = getOrCreateQueueSheet_();
     var simdiClaim = new Date();
     bakimYap_(sheet, simdiClaim);
+    takililar = takiliBekleyenleriPesEt_(sheet, simdiClaim);
 
     var tumSatirlar = kuyrukTumSatirlariOku_(sheet);
     vadesiGelenler = tumSatirlar
@@ -772,7 +889,7 @@ function zamanlanmisTekrarDenemeyiIsle() {
           row.sonrakiDenemeZamani instanceof Date
             ? row.sonrakiDenemeZamani.getTime()
             : new Date(row.sonrakiDenemeZamani).getTime();
-        return sonrakiMs <= simdiClaim.getTime();
+        return sonrakiMs <= simdiClaim.getTime() + RETRY_VADE_TOLERANSI_MS;
       })
       .slice(0, RETRY_MAX_SATIR_PER_TETIKLEME)
       .sort(function (a, b) {
@@ -792,8 +909,10 @@ function zamanlanmisTekrarDenemeyiIsle() {
 
     log_("yenidenDeneme.tarama", { vadesiGelen: vadesiGelenler.length });
   } finally {
-    lock.releaseLock();
+    kilidiBirak_(lock);
   }
+
+  takiliBekleyenleriBildir_(sheet, takililar);
 
   vadesiGelenler.forEach(function (row) {
     var simdi = new Date();

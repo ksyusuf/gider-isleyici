@@ -280,12 +280,44 @@ container-bound sheet'inden AYRI, harici bir spreadsheet olarak) açtığı içi
 Fitness'in bir sonraki çalıştırmasında yeni bir Google OAuth izin ekranı
 çıkabilir (daha geniş Sheets erişim kapsamı gerekir) — normal, kabul edilmeli.
 
-**Açık nokta (bilinçli olarak ertelendi):** Bu bot "off" gibi fitness-amaçlı
-metinleri de Gemini'ye gönderip muhtemelen bir netleştirme cevabı döndürüyor
-olabilir (kullanıcı için gereksiz ikinci bir bot cevabı). Kuyruk çözümü mesaj
-KAYBINI giderir ama bu "yanlış bota cevap" gürültüsünü gidermez; istenirse
-ileride bu projeye de hafif bir "muhtemelen bana ait değil" kısayolu
-eklenebilir.
+**Açık nokta → ÇÖZÜLDÜ (2026-10-05), bkz. aşağıdaki "Fitness mesajları
+`/spor` ile işaretlenir" bölümü.**
+
+## Fitness mesajları `/spor` ile işaretlenir (2026-10-05)
+
+**Problem:** Fitness kuyruğu kelime eşleşmesiyle (`off` / blok adı alt-string'i)
+filtreliyordu; eşleşen harcama mesajları (ör. "sırt çantası aldım 800 tl")
+sporcu notu olarak yazılıyordu. Ters yön de vardı: spor mesajları bu projede
+LLM'e gidip gereksiz netleştirme cevabı üretebiliyordu.
+
+**Çözüm (kullanıcı kararı, yeniden tartışılmadan korunmalı):** spor bildirimi
+`/spor <mesaj>` ile TEK SATIRDA yazılır (alt satır gerekmez).
+- `Telegram.js > sporMesajiMi_` + `Main.js > doPost`: `kuyrugaEkle_`'den SONRA,
+  `/` komut bloğundan ÖNCE `/spor` ise log atıp `respondOk_()` döner — LLM yok,
+  "Komut bulunamadı" yok. Argümanlı `/spor ...` tamamen sessiz; **İSTİSNA
+  (2026-10-05, kullanıcı isteği):** argümansız çıplak `/spor`
+  (`sporMesajiBosMu_`) kullanım açıklaması (`SPOR_KULLANIM_METNI`, Markdown,
+  örnekler backtick içinde) gönderir — kullanıcı komutu nasıl kullanacağını
+  öğrensin. Fitness boş içerikli satırı zaten atlıyor. Kuyruğa yazım değişmedi
+  (ham metin `/spor off` olarak A:D'ye gider).
+- Fitness `durumYonetimi.js > yeniTelegramMesajlariniGetir_`: yalnızca
+  `/^\/spor(?:@\w+)?\s+([\s\S]+)$/i` eşleşen satırları işler, ön eki söker,
+  ön eksizleri atlar (cursor ilerler). Kural iki projede AYNI olmalı.
+- `KOMUT_LISTESI_METNI`'ne spor satırı eklendi ama `/spor` BACKTICK içinde:
+  Telegram çıplak `/spor`'u tıklanabilir komut yapar, yanlışlıkla boş `/spor`
+  gönderilmesin diye code span kullanıldı (dokunmak sadece kopyalar). Çıplak
+  `/spor` bu listede hiçbir yerde yazılmamalı.
+- Düz "spor ..." öneki bilinçli reddedildi ("spor ayakkabısı aldım 2500 tl"
+  ile çakışır). Harcamaya işaret koymak da reddedildi (sık akışa yük).
+- Kenar durum: kullanıcı `/spor` unutursa mesaj harcama olarak LLM'e gider,
+  Fitness işlemez; yeniden `/spor ...` yazılmalı. Çıplak "off" artık çalışmaz.
+- Eski yanlış sporcu notları (Script Properties `gun_sporcu_notu`,
+  `spor_gecmis` not sütunu) otomatik temizlenmedi — elle kontrol edilmeli.
+- **Doğrulama:** `node --check` 4 dosyada geçti; regex tablo testi 11/11 PASS.
+  Gerçek Telegram testi YAPILMADI; deploy (iki proje) sonrası: `/spor off` →
+  bot sessiz, `telegram_queue`'da satır, Fitness bir sonraki çalışmada işler;
+  `/komutlar`'daki `/spor` dokununca mesaj göndermemeli; "sırt çantası aldım
+  800 tl" → harcama yazılır, Fitness'te not oluşmaz.
 
 **Henüz yapılmadı / açık:**
 - O 4 execution prod tabloya mükerrer satır yazmış olabilir. `❓ Netleştirilmesi
@@ -724,6 +756,71 @@ handler'a ait trigger'a hiç dokunulmuyor). `node --check` ve fonksiyon
 envanteri diff'i tüm dosyalarda tekrarlandı. Gerçek trigger silme/Sheets
 etkileşimi kullanıcı tarafından gerçek ortamda test edilmeli — bkz. aşağıdaki
 "Az-token doğrulama rehberi"ne eklenen satır.
+
+## Takılı BEKLIYOR satırı: PES_EDILDI'ye düşür, görünür kıl (2026-10-05)
+
+**Vaka (prod):** `BEKLIYOR | aşama 1 | sonraki 11:09:35 | ilk_hata 10:59:35 |
+son_deneme 10:59:35 | "…kota doldu…" | trigger_id dolu` — trigger hiç başarılı
+tekrar deneme yapmadı (aşama 1 + `son_deneme == ilk_hata`), Triggers listesinde
+de yoktu. Satır `/pesedilenler`'de görünmediği için (yalnızca `PES_EDILDI`'ye
+bakıyor) harcama unutulacaktı.
+
+**Olası sebepler (log olmadığı için hangisi kesinleşmedi; kod incelemesi):**
+- **A. Sweep yarışı:** `yenidenDenemeKuyruguEkle_` trigger'ı kilit DIŞINDA
+  kurup satırı kilit içinde yazıyor; arada başka bir execution
+  `sahipsizTetikleyicileriTemizle_`'yi çalıştırırsa yeni trigger "sahipsiz"
+  sanılıp silinir (29 Eylül'deki "kabul edilen kalıntı risk" — GERÇEKLEŞMİŞ
+  olabilir).
+- **B. Zaman kayması:** `sonraki_deneme_zamani` trigger kurulduktan SONRA
+  hesaplanıyor; trigger tam zamanında ateşlenince satır "vadesi gelmedi"
+  sayılıp tek seferlik trigger boşa harcanıyordu.
+- **C. Kilit zaman aşımı:** trigger ateşlendi ama `waitLock` 10 sn'de
+  alınamadı, fonksiyon sessizce döndü.
+
+**Karar (kullanıcı, yeniden tartışılmadan korunmalı):** satırı otomatik
+kurtarmak (yeni trigger kurmak) ya da atomik kurulum (A'yı baştan önleme)
+YAPILMADI — "sistem sessizce susmasın, harcamayı unutmayayım" yeterli,
+karmaşıklık istenmedi. Tekrarlanırsa atomik kurulum (trigger kurma + satır
+yazma aynı kilit altında) ve otomatik yeniden kurma değerlendirilecek.
+
+**Uygulanan (`retry/RetryCore.js`, `retry/RetryCommands.js`):**
+1. `RETRY_VADE_TOLERANSI_MS` (90 sn): `zamanlanmisTekrarDenemeyiIsle` vade
+   filtresi `sonrakiMs <= simdi + tolerans` (B ve C'yi kapatır).
+2. `RETRY_TAKILI_ESIK_MS` (15 dk) + `takiliBekleyenleriPesEt_(sheet, simdi)`:
+   vadesi eşikten fazla geçmiş BEKLIYOR satır → ölü trigger silinir, satır
+   `PES_EDILDI` ("Otomatik tekrar deneme zamanında tetiklenmedi."). Ağ çağrısı
+   yok, yeni trigger yok. Çağrıldığı yerler: `bakimYapKilitli_` (her `doPost`'ta
+   `kuyrugaEkle_` üzerinden), `zamanlanmisTekrarDenemeyiIsle` başı — ikisinde
+   de kilit bırakıldıktan SONRA `takiliBekleyenleriBildir_` mevcut
+   `pesEdildiBildirimGonder_` ile Telegram bildirimi yollar; ayrıca
+   `/pesedilenler` ve `/pesdene` komutları başta `takiliBekleyenleriKilitliPesEt_`
+   çağırır (bildirimsiz; komut çıktısı zaten listeler), yani kullanıcı
+   kontrol ettiği anda takılı satır görünür/tekrar denenebilir.
+3. `yenidenDenemeKuyruguDurumu()` çıktısına `takili` (eşikten fazla geçmiş
+   BEKLIYOR sayısı, salt okuma) eklendi — tekrar sıklığı izlenebilir.
+
+**Ek (kullanıcı önerisi, aynı gün): kilit bırakılmadan önce `flush`.** Apps
+Script dokümantasyonu, sheet'e yazan bir execution'ın `releaseLock()`'tan ÖNCE
+`SpreadsheetApp.flush()` çağırmasını gerektirir; aksi halde kilidi hemen alan
+başka bir execution henüz commit edilmemiş eski satır verisini okuyabilir.
+Bu, yukarıdaki A adayını (sweep'in yeni `trigger_id`'yi görmeyip trigger'ı
+sahipsiz sanması) doğrudan besleyebilecek bir mekanizma — yani sebep olabilir.
+`RetryCore.js > kilidiBirak_(lock)` (flush + `releaseLock`) eklendi ve dosyadaki
+5 `releaseLock()` çağrısının hepsi buna çevrildi. **Yeni kilit kullanımlarında
+`lock.releaseLock()` doğrudan çağrılmamalı, `kilidiBirak_` kullanılmalı.**
+`Main.js > isYeniUpdate_` kilidi yalnızca PropertiesService'i sardığı için
+(sheet yazımı yok) bilerek değiştirilmedi.
+
+**Kalan sınırlama:** kullanıcı hiç mesaj atmaz VE `/pesedilenler`'i hiç
+çalıştırmazsa dönüşüm tetiklenmez (periyodik trigger yok kararı korunuyor).
+`PES_EDILDI` satırlar hiçbir zaman otomatik silinmez (mevcut kural).
+
+**Doğrulama:** `node --check` iki dosyada geçti; izole Node harness'ı 5/5 PASS
+(yalnız 20 dk gecikmiş BEKLIYOR dönüşür, 5 dk gecikmiş/gelecek/TAMAMLANDI/
+ISLENIYOR/PES_EDILDI/boş-durum satırlarına dokunulmaz, ölü trigger silinir).
+Gerçek ortam testi YAPILMADI — deploy sonrası mevcut takılı satır bir sonraki
+mesaj ya da `/pesedilenler` ile PES_EDILDI olarak görünmeli. **`clasp push` +
+AYNI deployment ID'ye `clasp deploy -i <id>` gerekiyor (kullanıcı yapar).**
 
 ## Gemini → generic LLM katmanı (Groq) geçişi (2026-09-29)
 
@@ -1207,11 +1304,30 @@ harness'ı kurmaya ÇALIŞILMAMALI, önce bu tablo denenmeli.
 | `/pesedilenler`, `/pesdene`, `/komutlar` | Doğrudan Telegram'dan gönder, cevabı oku — listelenen mesaj metinlerinin backtick içinde göründüğünü gözle doğrula |
 | `/sonmesajisil` | Bir test mesajı gönder, hemen ardından `/sonmesajisil` gönder; queue'da o satırın `durum=SILINDI` olduğunu VE (48 saat içindeyse) Telegram'daki mesajın silindiğini doğrula. `BEKLIYOR` bir mesajda denenirse `yenidenDenemeKuyruguDurumu()`'nda `kayitliTriggerSayisi`'nin de düştüğünü kontrol et |
 | Sahipsiz trigger temizliği | Gemini'yi geçici olarak bozup bir mesajın `BEKLIYOR`'a düşmesini sağla (bir trigger kurulur), sonra o satırı Sheets'te ELLE sil; trigger ateşlenene kadar bekle (en kısa aşama ~10dk); `yenidenDenemeKuyruguDurumu()`'ndaki `kayitliTriggerSayisi`'nin 0'a düştüğünü ve Apps Script editörü → Triggers listesinde o trigger'ın artık GÖRÜNMEDİĞİNİ doğrula |
+| Takılı BEKLIYOR | `yenidenDenemeKuyruguDurumu()` → `takili` alanı > 0 ise takılı satır var; `/pesedilenler` çalıştır → o satır PES_EDILDI olarak listelenmeli, `/pesdene` ile tekrar denenir |
+| `/spor` yönlendirmesi | Telegram'dan tek satırda `/spor off` gönder → bot HİÇ cevap vermemeli, `telegram_queue`'da satır oluşmalı; `/komutlar` çıktısındaki `/spor` kısmına dokununca mesaj gönderilmemeli (kopyalanmalı); "sırt çantası aldım 800 tl" normal harcama olarak yazılmalı |
 
 Kod satır numaralarına referans VERİLMEDİ (kod değiştikçe kayar) — yalnızca
 fonksiyon adları, çünkü onlar kararlı.
 
 ## Sonraki oturum için açık sorular
+
+- **DEPLOY DURUMU (2026-10-05, kullanıcının açık isteğiyle yapıldı):** `clasp
+  push` + `clasp deploy -i AKfycbxf7f…qBPZqmBdmqQ` ile webhook'a bağlı
+  dağıtım **@20**'ye güncellendi (yeni dağıtım/link OLUŞTURULMADI, mevcut
+  silinmedi). Bu sürüm şunları içerir: Groq/LLM geçişi sonrası düzeltmeler,
+  `/spor` yönlendirmesi + argümansız `/spor` kullanım metni, takılı BEKLIYOR →
+  PES_EDILDI, vade toleransı, `kilidiBirak_` (flush). Aşağıdaki "deploy
+  edilmedi" notları TARİHSELDİR. **Tuzak:** Git Bash (MSYS) `-d "/spor ..."`
+  gibi `/` ile başlayan argümanı dosya yoluna çevirir ("C:/Program
+  Files/Git/spor…") — açıklamayı `/` ile BAŞLATMAYIN (@19 bu yüzden bozuk
+  açıklamayla basıldı, @20 ile düzeltildi). Fitness projesi AYRI Apps Script
+  projesi: aynı gün (2026-10-05, kullanıcı isteğiyle) `Fitness/` dizininden
+  `clasp push` yapıldı (8 dosya, `/spor` önek filtresi dahil). Fitness'te
+  yalnızca `@HEAD` dağıtımı var ve zaman tetikleyicileri HEAD'i çalıştırır →
+  ayrıca `clasp deploy` GEREKMEZ/yapılmadı; yeni dağıtım oluşturulmamalı. Deploy sonrası
+  hâlâ yapılacak: gerçek Telegram'da `/spor off`, `/komutlar`, `/spor`
+  (çıplak) ve takılı satır doğrulaması.
 
 - Gerçek spreadsheet'in başlık/sütun düzeni `SHEET_LAYOUT` varsayımıyla
   birebir uyuşuyor mu?

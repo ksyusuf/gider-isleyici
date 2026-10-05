@@ -92,9 +92,10 @@ function getOrCreateQueueSheet_() {
 
 /**
  * Gelen bir Telegram mesajını, konusu (harcama/spor/vs.) fark etmeksizin ham
- * olarak kuyruk sekmesine ekler. Hiçbir sınıflandırma/filtreleme yapılmaz —
- * Fitness projesi kendi mevcut off/blok filtresiyle (tekMesajiIsle) kendine
- * ait olmayan mesajları zaten sessizce eliyor.
+ * olarak kuyruk sekmesine ekler. Burada sınıflandırma/filtreleme yapılmaz —
+ * Fitness projesi yalnızca `/spor ...` ile başlayan satırları işler (bkz.
+ * Fitness/durumYonetimi.js > yeniTelegramMesajlariniGetir_), geri kalanı
+ * (harcamalar, diğer komutlar) sessizce atlar.
  *
  * Hata durumunda ana harcama akışını (LLM çağrısı, Telegram cevabı) ASLA
  * bozmaz — sadece loglanır. Kuyruk yazımı bu proje için yan etkidir, kritik

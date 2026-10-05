@@ -169,11 +169,22 @@ function doPost(e) {
       return respondOk_();
     }
 
-    // Bu chat'ten gelen HER metin mesajı (komutlar dahil), konusu fark
-    // etmeksizin Fitness projesiyle paylaşılan kuyruğa da yazılır — bkz.
-    // Queue.js. Fitness kendi off/blok filtresiyle kendine ait olmayanları
-    // zaten eliyor; burada hiçbir sınıflandırma yapılmaz.
+    // Bu chat'ten gelen HER metin mesajı (komutlar dahil) Fitness projesiyle
+    // paylaşılan kuyruğa da yazılır — bkz. Queue.js. Hangi mesajın Fitness'e
+    // ait olduğuna Fitness kendisi karar verir: yalnızca `/spor ...` ile
+    // başlayanları işler (Fitness/durumYonetimi.js > yeniTelegramMesajlariniGetir_).
     kuyrugaEkle_(update.update_id, chatId, text, message.date, message.message_id);
+
+    // `/spor ...` Fitness'e aittir: LLM yok, cevap yok, tamamen sessiz.
+    // İSTİSNA: argümansız `/spor` → kullanım açıklaması gönderilir (Fitness
+    // zaten boş içerikli satırı atlıyor).
+    if (sporMesajiMi_(text)) {
+      log_("doPost.cikis", { sebep: "spor-fitness-icin", bos: sporMesajiBosMu_(text) });
+      if (sporMesajiBosMu_(text)) {
+        sendTelegramMessage_(chatId, SPOR_KULLANIM_METNI, "Markdown");
+      }
+      return respondOk_();
+    }
 
     // `/` ile başlayan komutlar LLM'e hiç gitmeden burada, deterministik
     // olarak işlenir (bkz. Telegram.js > islemKomut_ ve apps-script/CLAUDE.md madde 2).

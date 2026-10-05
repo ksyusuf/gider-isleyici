@@ -29,6 +29,7 @@
  */
 function pesEdilenleriListele_() {
   var sheet = getOrCreateQueueSheet_();
+  takiliBekleyenleriKilitliPesEt_(sheet); // takılı BEKLIYOR satırlar da listede görünsün
   var simdi = new Date();
   var pesEdilenler = kuyrukTumSatirlariOku_(sheet).filter(function (row) {
     return row.durum === RETRY_DURUM.PES_EDILDI;
@@ -77,6 +78,7 @@ function pesEdilenleriListele_() {
  */
 function pesEdilenleriTekrarDene_() {
   var sheet = getOrCreateQueueSheet_();
+  takiliBekleyenleriKilitliPesEt_(sheet); // takılı BEKLIYOR satırlar da tekrar denensin
   var pesEdilenler = kuyrukTumSatirlariOku_(sheet)
     .filter(function (row) {
       return row.durum === RETRY_DURUM.PES_EDILDI;
@@ -250,6 +252,15 @@ function yenidenDenemeKuyruguDurumu() {
   var tamamlanan = satirlar.filter(function (r) {
     return r.durum === RETRY_DURUM.TAMAMLANDI;
   });
+  // Vadesi RETRY_TAKILI_ESIK_MS'den fazla geçmiş BEKLIYOR = takılı (salt okuma,
+  // dönüşümü bakım/komutlar yapar) — sıfırdan büyükse trigger kaybı sinyalidir.
+  var takili = bekleyen.filter(function (r) {
+    var ms =
+      r.sonrakiDenemeZamani instanceof Date
+        ? r.sonrakiDenemeZamani.getTime()
+        : new Date(r.sonrakiDenemeZamani).getTime();
+    return !isNaN(ms) && ms + RETRY_TAKILI_ESIK_MS < simdi.getTime();
+  });
 
   var enEskiMs = satirlar.reduce(function (acc, r) {
     var t =
@@ -268,6 +279,7 @@ function yenidenDenemeKuyruguDurumu() {
   var ozet = {
     retryTakipliSatir: satirlar.length,
     bekleyen: bekleyen.length,
+    takili: takili.length,
     isleniyor: isleniyor.length,
     pesEdilen: pesEdilen.length,
     tamamlanan: tamamlanan.length,
