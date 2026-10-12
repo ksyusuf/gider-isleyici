@@ -169,18 +169,54 @@ function doPost(e) {
       return respondOk_();
     }
 
+    // Spor notu bekleme modu (bkz. SporNot.js). Önce süresi dolmuş bir bekleme
+    // varsa (trigger gecikmiş olabilir) tembel yoldan kapatılıp bildirilir;
+    // bildirimi yalnızca beklemeyi fiilen kapatan taraf yollar.
+    var dolanBekleme = sporNotBeklemeSuresiniDoldur_();
+    if (dolanBekleme) {
+      sendTelegramMessage_(chatId, SPOR_NOT_BEKLEME_SURE_DOLDU_METNI);
+    }
+
+    // Beklemedeyken gelen düz (komut olmayan) mesaj, komut aranmadan spor notudur:
+    // Fitness'in tanıyacağı `/spornotu <metin>` biçiminde kuyruğa yazılır.
+    var notYakalandi =
+      sporNotBeklemeAktifMi_() && text.trim().charAt(0) !== "/";
+    var kuyrukMetni = notYakalandi ? "/spornotu " + text.trim() : text;
+
     // Bu chat'ten gelen HER metin mesajı (komutlar dahil) Fitness projesiyle
     // paylaşılan kuyruğa da yazılır — bkz. Queue.js. Hangi mesajın Fitness'e
-    // ait olduğuna Fitness kendisi karar verir: yalnızca `/spor ...` ile
+    // ait olduğuna Fitness kendisi karar verir: yalnızca `/spor` ile
     // başlayanları işler (Fitness/durumYonetimi.js > yeniTelegramMesajlariniGetir_).
-    kuyrugaEkle_(update.update_id, chatId, text, message.date, message.message_id);
+    kuyrugaEkle_(update.update_id, chatId, kuyrukMetni, message.date, message.message_id);
 
-    // `/spor ...` Fitness'e aittir: LLM yok, cevap yok, tamamen sessiz.
-    // İSTİSNA: argümansız `/spor` → kullanım açıklaması gönderilir (Fitness
-    // zaten boş içerikli satırı atlıyor).
+    if (notYakalandi) {
+      // Sıra önemli: kuyruk yazımı başarısız olursa (istisna) bekleme korunur,
+      // kullanıcı notu yeniden gönderebilir.
+      sporNotBeklemeTemizle_();
+      log_("doPost.cikis", { sebep: "spor-notu-yakalandi" });
+      sendTelegramMessage_(chatId, SPOR_NOT_ALINDI_METNI);
+      return respondOk_();
+    }
+
+    // `/spor...` Fitness'e aittir: LLM yok. Çoğu komutta bot tamamen sessiz;
+    // yanıt veren istisnalar: çıplak `/spor` (kullanım), not komutları (bekleme modu).
     if (sporMesajiMi_(text)) {
-      log_("doPost.cikis", { sebep: "spor-fitness-icin", bos: sporMesajiBosMu_(text) });
-      if (sporMesajiBosMu_(text)) {
+      var notTuru = sporNotuKomutuTuru_(text);
+      log_("doPost.cikis", { sebep: "spor-fitness-icin", notTuru: notTuru });
+      if (notTuru === "bos") {
+        sporNotBeklemeBaslat_(chatId);
+        sendTelegramMessage_(chatId, SPOR_NOT_BEKLEME_BASLADI_METNI);
+      } else if (notTuru === "iptal") {
+        if (sporNotBeklemeAktifMi_()) {
+          sporNotBeklemeTemizle_();
+          sendTelegramMessage_(chatId, SPOR_NOT_BEKLEME_IPTAL_METNI);
+        } else {
+          sendTelegramMessage_(chatId, SPOR_NOT_BEKLEME_YOK_METNI);
+        }
+      } else if (notTuru === "icerikli") {
+        sporNotBeklemeTemizle_();
+        sendTelegramMessage_(chatId, SPOR_NOT_ALINDI_METNI);
+      } else if (sporMesajiBosMu_(text)) {
         sendTelegramMessage_(chatId, SPOR_KULLANIM_METNI, "Markdown");
       }
       return respondOk_();
@@ -396,6 +432,39 @@ function webhookDurumu() {
     "https://api.telegram.org/bot" + CONFIG.telegramToken + "/getWebhookInfo";
   var response = UrlFetchApp.fetch(telegramUrl, {
     method: "get",
+    muteHttpExceptions: true,
+  });
+  Logger.log(response.getContentText());
+  return response.getContentText();
+}
+
+/**
+ * Telegram'ın mesaj kutusundaki "/" menüsünü (setMyCommands) kaydeder: komutlar
+ * açıklamalı ve otomatik tamamlanan bir listede görünür. Komut listesi değiştikçe
+ * (örn. yeni komut eklenince) editörden yeniden çalıştırılır; idempotenttir.
+ * Not: menüde olmayan komutlar da çalışır — menü yalnızca keşfedilebilirlik içindir.
+ * Komut adları yalnız küçük harf/rakam/`_` içerebilir.
+ * @return {string} Telegram API yanıtı.
+ */
+function kurulumKomutlar() {
+  var telegramUrl =
+    "https://api.telegram.org/bot" + CONFIG.telegramToken + "/setMyCommands";
+  var response = UrlFetchApp.fetch(telegramUrl, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({
+      commands: [
+        { command: "son", description: "Son harcamaları listele (örn. /son 10)" },
+        { command: "toplam", description: "Son N harcamanın toplamı" },
+        { command: "pesedilenler", description: "Otomatik denemesi tükenen mesajlar" },
+        { command: "pesdene", description: "Pes edilen mesajları şimdi tekrar dene" },
+        { command: "sonmesajisil", description: "Bir önceki mesajı sil / tekrar denemeyi iptal et" },
+        { command: "komutlar", description: "Komut listesini göster" },
+        { command: "spor", description: "Spor komutlarının nasıl kullanıldığı" },
+        { command: "spornotu", description: "Spor notu ekle (sonraki mesaj not olur)" },
+        { command: "sporiptal", description: "Bekleyen spor notunu iptal et" },
+      ],
+    }),
     muteHttpExceptions: true,
   });
   Logger.log(response.getContentText());

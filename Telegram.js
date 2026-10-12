@@ -126,45 +126,67 @@ const KOMUT_LISTESI_METNI = [
   "",
   // Bilerek backtick içinde: Telegram metindeki `/spor` kalıbını tıklanabilir
   // komuta çevirir, yanlışlıkla boş `/spor` gönderilmesin diye code span'e alınır.
-  "🏋️ Spor verisi girmek için mesajı komutla başlat (tek satır): `/spor off` veya `/spor yarın göğüs` — bot cevap vermez, Fitness bir sonraki çalışmasında işler.",
+  "🏋️ Spor bildirimleri elle yazılmaz: Fitness bildirimlerinin altındaki komutlara dokun (off / blok değiştir). Not eklemek için `/spornotu` — bot cevap vermez, Fitness bir sonraki çalışmasında işler.",
 ].join("\n");
 
 /**
- * Mesaj Fitness modülüne ait mi (`/spor ...`)? Bu mesajlar kuyruğa yazılır ama
- * gider-isleyici tarafında ne LLM'e gider ne de cevaplanır (bkz. Main.js >
- * doPost). Fitness tarafındaki eşleşme (Fitness/durumYonetimi.js >
- * yeniTelegramMesajlariniGetir_) ile aynı kural olmalı.
+ * Mesaj Fitness modülüne ait mi? `/spor` ile başlayan her şey (`/spor_bugun_off`,
+ * `/spor_yarin_gogus`, `/spornotu ...`, `/sporiptal`...) kuyruğa yazılır ama
+ * gider-isleyici tarafında ne LLM'e gider ne de (not komutları ve çıplak `/spor`
+ * dışında) cevaplanır — bkz. Main.js > doPost. Hangi komutun geçerli olduğunu
+ * Fitness (sporKomutlari.js > sporKomutunuCoz_) belirler; burada regex yok.
  * @param {string} text
  * @return {boolean}
  */
 function sporMesajiMi_(text) {
-  return /^\/spor(?:@\w+)?(\s|$)/i.test(String(text).trim());
+  return String(text).trim().startsWith("/spor");
 }
 
 /**
- * `/spor` tek başına (argümansız) mı? Bu durumda Fitness'in işleyeceği bir
- * içerik yoktur; kullanıcıya kullanım açıklaması gösterilir (bkz. Main.js).
+ * `/spor` tek başına mı? Bu durumda kullanıcıya kullanım açıklaması gösterilir
+ * (bkz. Main.js).
  * @param {string} text
  * @return {boolean}
  */
 function sporMesajiBosMu_(text) {
-  return /^\/spor(?:@\w+)?$/i.test(String(text).trim());
+  return String(text).trim() === "/spor";
+}
+
+/**
+ * Not komutlarının türü (bkz. SporNot.js):
+ *  - "bos"      : çıplak `/spornotu` → not bekleme modunu başlatır
+ *  - "icerikli" : `/spornotu <açıklama>` → tek mesajda not
+ *  - "iptal"    : `/sporiptal` → not beklemeyi iptal eder
+ *  - null       : not komutu değil
+ * @param {string} text
+ * @return {("bos"|"icerikli"|"iptal"|null)}
+ */
+function sporNotuKomutuTuru_(text) {
+  var t = String(text).trim();
+  if (t === "/sporiptal") return "iptal";
+  if (t === "/spornotu") return "bos";
+  if (t.startsWith("/spornotu")) {
+    var sonraki = t.charAt("/spornotu".length);
+    if (sonraki === " " || sonraki === "\n" || sonraki === "\t") {
+      return "icerikli";
+    }
+  }
+  return null;
 }
 
 /**
  * Argümansız `/spor`'a cevap. Komut örnekleri backtick içinde: Telegram
- * çıplak `/spor` kalıbını tıklanabilir yapar, tıklanınca yine boş `/spor`
- * gönderilirdi (bkz. KOMUT_LISTESI_METNI).
+ * çıplak `/spornotu` kalıbını tıklanabilir yapar, tıklanınca bekleme modu
+ * başlardı (bkz. KOMUT_LISTESI_METNI).
  */
 const SPOR_KULLANIM_METNI = [
-  "🏋️ `/spor` komutu spor bildirimleri içindir (Fitness modülü).",
+  "🏋️ Spor bildirimleri artık elle yazılmaz.",
   "",
-  "Komutun yanına aynı satırda bildirimini yaz:",
-  "• `/spor off` — bugün spor yok",
-  "• `/spor yarın göğüs` — yarın göğüs günü",
-  "• `/spor dün sırt, dizim ağrıyor` — geçmiş güne not ekle",
+  "• Fitness bildirimlerinin altındaki komutlara dokun: bugün/dün/yarın off, ya da bugünün/yarının bloğunu değiştir.",
+  "• Not eklemek için `/spornotu` gönder: botun \"bir sonraki mesajın not olarak kaydedilecek\" demesinin ardından notunu yaz (10 dk içinde). Tek mesajda da olur: `/spornotu dizim ağrıyor`.",
+  "• Notu beklerken vazgeçersen: `/sporiptal`.",
   "",
-  "Gönderince bot cevap vermez; Fitness bir sonraki çalışmasında işler. `/spor` olmadan yazılan mesajlar harcama sayılır.",
+  "Bot komutlara cevap vermez; Fitness bir sonraki çalışmasında işler. `/spor` ile başlamayan mesajlar harcama sayılır.",
 ].join("\n");
 
 /**

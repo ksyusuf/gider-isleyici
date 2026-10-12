@@ -285,6 +285,8 @@ Fitness'in bir sonraki çalıştırmasında yeni bir Google OAuth izin ekranı
 
 ## Fitness mesajları `/spor` ile işaretlenir (2026-10-05)
 
+> **TARİHSEL (2026-10-12):** aşağıdaki elle yazılan `/spor <metin>` akışı kaldırıldı; güncel mimari için "Spor modülü yalnızca komutlarla çalışır" bölümüne bakın.
+
 **Problem:** Fitness kuyruğu kelime eşleşmesiyle (`off` / blok adı alt-string'i)
 filtreliyordu; eşleşen harcama mesajları (ör. "sırt çantası aldım 800 tl")
 sporcu notu olarak yazılıyordu. Ters yön de vardı: spor mesajları bu projede
@@ -1310,7 +1312,120 @@ harness'ı kurmaya ÇALIŞILMAMALI, önce bu tablo denenmeli.
 Kod satır numaralarına referans VERİLMEDİ (kod değiştikçe kayar) — yalnızca
 fonksiyon adları, çünkü onlar kararlı.
 
+## Spor modülü yalnızca komutlarla çalışır: hızlı komutlar + `/spornotu` (2026-10-12)
+
+> Bu bölüm "Fitness mesajları `/spor` ile işaretlenir (2026-10-05)" bölümündeki
+> elle yazılan `/spor off` / `/spor yarın göğüs` / `/spor dün sırt, ...` akışının
+> YERİNİ ALDI — o bölüm tarihseldir. Elle yazılan `/spor <metin>` artık
+> işlenmez (kullanıcı kararı: "spor komutlarını asla elle göndermeyeceğiz").
+
+**Telegram kısıtı (kararın nedeni, yeniden tartışılmamalı):** tıklanabilir olan
+yalnızca `/komut` kısmıdır (Latin harf/rakam/`_`, en çok 32 karakter), boşluktan
+sonraki argüman linke dahil değildir → `/spor dün off` tek dokunuşla
+gönderilemez. Düz bir komutu yazı alanına koyup bekletme özelliği de yok (sadece
+inline-mode butonları yapar; bot başına inline mode + `@botadı` öneki gerektirir,
+reddedildi). Çözüm: gün ve hedef komut ADINA gömülür.
+
+**Komut dili (`Fitness/sporKomutlari.js`, regex YOK):**
+- `/spor_<gun>_off` — `gun` = `bugun|dun|yarin`.
+- `/spor_<gun>_<blok>` — `<blok>` = aktif programdaki bloğun ASCII slug'ı
+  (`BLOK GÖĞÜS` → `gogus`, `BLOK ALT GRUP` → `alt_grup`; `blokSlug_`, karakter
+  koduyla küçültme). Slug'lar komutu tutan bir tabloda saklanmaz: her işlemde aktif
+  programın bloklarından yeniden üretilip karşılaştırılır (`blokKomutListesi_`).
+  Çakışan / 32 karakteri aşan / boş / `off` ile çakışan bloklar komut ALMAZ (log).
+  Ay değişince eski bildirimdeki blok komutu eşleşmez ve yok sayılır (kabul edilen kısıt).
+- Eşleşme büyük/küçük harf DUYARLIDIR (`/i` ve `toLowerCase` bilerek yok).
+- Her bildirimin (sabah, ikindi, akşam) sonuna `hizliKomutBlogu_("BUGUN"|"YARIN")`
+  eklenir: üç günlük off + (sabah/ikindi: bugünün, akşam: yarının) blok değiştirme
+  komutları + `/spornotu`. HTML'de `<code>` içine ALINMAZ (code span tıklanamaz).
+  Program okunamazsa yalnız off komutları gösterilir. Hata bildirimine eklenmez.
+  Off/blok komutuna dokununca bot SESSİZ kalır (kullanıcı kararı).
+- Silinen elle-yazma mantığı: `gunOnekiTespitEt_`, `blokAnahtariniMetindenBul_`
+  (kelime puanlama), `BLOK_KELIME_ESANLAMLILAR`, `mesajdanEkNotCikar_`,
+  `toLocaleLowerCase`, `/spor <metin>` regex'leri.
+
+**`/spornotu` (serbest not, iki biçim):**
+- `/spornotu açıklama` tek mesajda; ya da çıplak `/spornotu` → bot hemen "bir sonraki
+  mesajın spor notu olarak kaydedilecek, iptal: /sporiptal" der ve **bekleme
+  moduna** girer (`gider-isleyici/SporNot.js`). Beklemedeyken gelen düz mesaj
+  (komut aranmadan) kuyruğa `/spornotu <metin>` olarak yazılır (ham metin değil),
+  bekleme biter, kısa onay gider. `/sporiptal` beklemeyi iptal eder. Bekleme
+  sırasında gelen başka `/komut` normal işlenir ve beklemeyi bozmaz.
+- Bekleme durumu gider-isleyici'dedir (anlık cevap verebilen tek taraf; Fitness
+  günde 3 kez çalışır): Script Property `SPOR_NOT_BEKLEME` = `{baslangicMs, chatId}`.
+  **10 dk** sonra düşer ve bot "⏱️ süre doldu, normal moda dönüldü" bildirir.
+- **Trigger güvenliği (kritik, gevşetilmemeli):** süre dolma bildirimi tek seferlik
+  `after(10dk)` trigger'ı ile (`sporNotBeklemeSuresiDoldu`); periyodik trigger yok.
+  Sızıntı önlemleri: trigger id SAKLANMAZ, temizlik handler adına göre TÜM
+  trigger'ları siler (en fazla 1 canlı, sahipsiz kalamaz); handler ilk iş kendini
+  siler (`e.triggerUid`); trigger kurulamazsa bekleme yine başlar ve bildirim
+  sonraki mesajda tembel yoldan gelir; süre kontrolü HER ZAMAN zaman damgasıyla;
+  "süresi doldu mu → temizle" kilit altında atomik (`sporNotBeklemeSuresiniDoldur_`),
+  trigger ve tembel yol yarışsa da bildirim bir kez. Retry sisteminin
+  sahipsiz-trigger taraması yalnız `RETRY_HANDLER_FN_ADI`'ye baktığı için bu
+  trigger'a dokunmaz. Sıra önemli: not yakalanınca ÖNCE kuyruğa yaz, SONRA bekleme
+  temizle (yazım hata verirse bekleme korunur, not kaybolmaz).
+- **Fitness tarafı:** `sporNotunuIsle_` yeni bir Gemini sorgusuyla
+  (`sporNotuGunuAiIleBul_`) YALNIZCA notun gününü (`dun|bugun|yarin`, mesaj tarihine
+  göre) bulur; AI'ın metni kullanılmaz, kullanıcının metni olduğu gibi yazılır.
+  AI hata verir/geçersiz dönerse not mesaj gününe (`bugun`) bağlanır (log'lanır).
+  Hedef gün MUTLAK tarihe çevrilir (mesaj tarihi + ofset; `stale` kuralı notlara
+  uygulanmaz): bugün (gün kapanmadıysa) → `GUN_SPORCU_NOTU`; bugün ama gün
+  kapanmışsa (`FINALIZE_EDILEN_TARIH`, 22:00 sonrası) → spor_gecmis not hücresi
+  (aksi halde not ertesi günün kararına sızardı); yarın → `YARIN_SPORCU_NOTU(_TARIHI)`;
+  geçmiş → spor_gecmis (`gecmisNotunuGuncelle_`: yalnız not hücresi, durum/blok
+  ezilmez); yarından ilerisi → loglanıp atlanır. Aynı güne ikinci not `" | "` ile eklenir.
+  Not tüketicileri (AI prompt'u, `finalizeGunSonu_`, `yarinNotunuGununeTasiyaCalis_`)
+  DEĞİŞMEDİ. Editörden yan etkisiz test: `sporNotuAiTest_("dün dizim ağrıdı")`.
+
+**gider-isleyici tarafı:** `Telegram.js > sporMesajiMi_` = `startsWith("/spor")`
+(regex yok; hangi komutun geçerli olduğuna Fitness karar verir). `sporMesajiBosMu_` =
+tam `/spor` (kullanım metni, `SPOR_KULLANIM_METNI`). `sporNotuKomutuTuru_` →
+`bos|icerikli|iptal`. `Main.js > doPost`: bekleme kontrolü `kuyrugaEkle_`'den ÖNCE;
+çıplak `/spor`, `/spornotu`, `/sporiptal` ve not yakalama dışındaki tüm `/spor...`
+mesajları sessiz. `Main.js > kurulumKomutlar()` (editörden bir kez çalıştırılır):
+`setMyCommands` ile "/" menüsünü kaydeder (spor, spornotu, sporiptal dahil).
+
+**Bilinen kısıtlar:**
+- Gün, komutun GÖNDERİLDİĞİ tarihe göre çözülür; off/blok komutlarına bildirimden
+  2+ gün sonra dokunulursa "stale" sayılıp yok sayılır (notlar hariç).
+- `/sonmesajisil` bir spor satırını Fitness okumadan iptal etmez (Fitness `durum`
+  kolonuna bakmıyor; bu kısıt tüm `/spor` satırları için geçerliydi).
+- Sabah kararı verildikten sonra gelen "bugün" notu o günün AI kararını etkilemez
+  (yalnız geçmişe yazılır).
+- Beklemede kullanıcı yanlışlıkla bir harcama yazarsa not olarak kaydolur
+  (10 dk penceresi ve açık bilgilendirme ile sınırlı).
+
+**Doğrulama:** `node --check` tüm dosyalarda geçti. Scratchpad'te (commit
+edilmeyen) mock-Apps-Script harness'ları: Fitness 71/71 PASS (slug tablosu,
+komut→çözümleme round-trip, çakışma/uzunluk atlama, bildirim bloğu sabah/akşam,
+`tekMesajiIsle_` off/blok/dün/devir/stale, not hedef-gün tablosu, kuyruk
+`startsWith` filtresi, silinen fonksiyonlara referans yok), gider-isleyici 56/56 PASS
+(çıplak `/spornotu` akışı, spam'de tek trigger, `/sporiptal`, tek mesajda not,
+trigger handler + tembel yol çift bildirim yok, erken/geç trigger, trigger
+kurulamama, kuyruk hatasında bekleme korunur, handler Telegram hatasında trigger
+sızmaz, sahipsiz trigger süpürme + retry trigger'ına dokunmama). **Gerçek Telegram
+ve gerçek Gemini testi YAPILMADI.**
+
+**Deploy (kullanıcı yapar):** Fitness `clasp push` (yalnız @HEAD; yeni dosya
+`sporKomutlari.js` dahil). gider-isleyici `clasp push` + AYNI deployment ID'ye
+`clasp deploy -i <id>`; ardından editörden `kurulumKomutlar()` bir kez. Sıra
+önemsiz (satır kuyruğa her halükârda yazılıyor). Gerçek test: bildirim sonunda
+komutlar tıklanabilir görünmeli, dokununca bot sessiz kalmalı, kuyrukta satır
+oluşmalı, sonraki Fitness çalışmasında işlenmeli; `sporNotuAiTest_("dün dizim
+ağrıdı")` → `dun`; çıplak `/spornotu` → bilgilendirme, 10 dk sonra "süre doldu"
+bildirimi ve Triggers listesinde `sporNotBeklemeSuresiDoldu` kalmaması; `/spor` →
+yeni kullanım metni.
+
 ## Sonraki oturum için açık sorular
+
+- **DEPLOY BEKLİYOR (2026-10-12): spor komut dili + `/spornotu`.** Kod hazır ve mock
+  harness'larla doğrulandı (bkz. "Spor modülü yalnızca komutlarla çalışır" bölümü) ama
+  HENÜZ push/deploy EDİLMEDİ ve gerçek Telegram/Gemini testi yapılmadı. Kullanıcı:
+  Fitness `clasp push`; gider-isleyici `clasp push` + AYNI deployment ID'ye `clasp
+  deploy -i`; editörden `kurulumKomutlar()` bir kez; `script.scriptapp` yetkisi zaten
+  retry için onaylı (yeni onay ekranı çıkmamalı). Bekleyen gerçek-ortam doğrulaması o
+  bölümün sonundaki listededir.
 
 - **DEPLOY DURUMU (2026-10-05, kullanıcının açık isteğiyle yapıldı):** `clasp
   push` + `clasp deploy -i AKfycbxf7f…qBPZqmBdmqQ` ile webhook'a bağlı
