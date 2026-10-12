@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   gider-isleyici (yayındaki Web App) için push + deploy güncelleme betiği.
 
@@ -14,7 +14,13 @@
   Not: dağıtım açıklaması "/" ile BAŞLAMAMALI (Git Bash/MSYS bunu dosya yoluna çevirir).
 
 .PARAMETER Aciklama
-  Dağıtım açıklaması (varsayılan: "yyyy-MM-dd HH:mm deploy.ps1").
+  Dağıtım açıklaması: yapılan işin KELİMESEL ÖZETİ (agentic çalışma sonrası deploy'da
+  zorunlu kural, bkz. CLAUDE.md). En fazla 200 karakter; fazlası "..." ile kısaltılır.
+  Boş bırakılırsa "yyyy-MM-dd HH:mm" + son git commit başlığı kullanılır.
+  Google, Apps Script API'sinde `description` için bir üst sınır yayımlamıyor
+  (DeploymentConfig: "The description for this deployment."); 200 karakter, kullanıcı
+  kararıyla seçilmiş okunabilirlik sınırıdır (Manage deployments listesi uzun metni
+  zaten kırpar).
 
 .PARAMETER DeploymentId
   Verilirse otomatik seçim yerine bu dağıtım güncellenir (listede var olmalı).
@@ -23,12 +29,22 @@
   powershell -File .\deploy.ps1
 #>
 param(
-  [string]$Aciklama = ("{0} deploy.ps1" -f (Get-Date -Format "yyyy-MM-dd HH:mm")),
+  [string]$Aciklama = "",
   [string]$DeploymentId = ""
 )
 
+$ACIKLAMA_MAX_KARAKTER = 200
+
 $ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
+
+# Türkçe karakterler: Windows PowerShell 5.1 BOM'suz dosyayı ANSI sanır ve çıktıyı
+# OEM kod sayfasıyla yazar. Bu dosya UTF-8 BOM ile kaydedilmeli (kodlama komut
+# satırında değil dosyada çözülür) ve konsol/pipe kodlaması UTF-8'e alınır.
+try {
+  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+  $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch { }
 
 function Clasp-Calistir {
   # clasp çıktısını (stdout+stderr) tek metin olarak döner; hata kodunu $script:ClaspKod'a yazar.
@@ -36,6 +52,22 @@ function Clasp-Calistir {
   $cikti = & clasp @Argumanlar 2>&1 | ForEach-Object { $_.ToString() }
   $script:ClaspKod = $LASTEXITCODE
   return ($cikti -join "`n")
+}
+
+function Aciklama-Hazirla {
+  # Boşsa tarih + son commit başlığı; satır sonlarını boşluğa çevirir, baştaki "/"
+  # karakterlerini atar (Git Bash/MSYS yol çevirisi) ve 200 karakterle sınırlar.
+  param([string]$Metin)
+  if ([string]::IsNullOrWhiteSpace($Metin)) {
+    $commit = (& git log -1 --pretty=%s 2>$null | Out-String).Trim()
+    $Metin = ("{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm"), $commit).Trim()
+  }
+  $Metin = ($Metin -replace "\s+", " ").Trim().TrimStart("/").Trim()
+  if ($Metin.Length -gt $ACIKLAMA_MAX_KARAKTER) {
+    Write-Host ("Uyarı: açıklama {0} karakter, {1} karaktere kısaltıldı." -f $Metin.Length, $ACIKLAMA_MAX_KARAKTER) -ForegroundColor Yellow
+    $Metin = $Metin.Substring(0, $ACIKLAMA_MAX_KARAKTER - 3).TrimEnd() + "..."
+  }
+  return $Metin
 }
 
 function Dagitimlari-Al {
@@ -89,7 +121,9 @@ Write-Host "==> clasp push..." -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { throw "clasp push başarısız." }
 
 # --- 4) Aynı dağıtıma yeni versiyon bas -----------------------------------------
+$Aciklama = Aciklama-Hazirla $Aciklama
 Write-Host "==> clasp deploy -i $($hedef.Id)..." -ForegroundColor Cyan
+Write-Host "    Açıklama ($($Aciklama.Length) karakter): $Aciklama"
 & clasp deploy -i $hedef.Id -d $Aciklama
 if ($LASTEXITCODE -ne 0) { throw "clasp deploy başarısız." }
 

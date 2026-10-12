@@ -14,15 +14,103 @@ kurulum için `README.md`'ye bakın.
 
 ## Önemli Kurallar
 
-**Asla git komutu çalıştırma** (add/commit/push/rm/mv fark etmez — hiçbiri).
-Repo'nun git tarafı tamamen kullanıcının elinde; staging/commit/push işini
-her zaman kullanıcı kendisi yapar.
-**Asla clasp komutlarını çalıştırma** (`clasp push` dahil).
-Bu iki kural yöneticinin açık isteği olmadan asla ihlal edilmez.
+**Geliştirici AÇIKÇA istemedikçe `clasp` (push/deploy/pull dahil) ve GitHub
+(`git push` dahil) ile yayın/gönderme işlemi YAPMA.** Kod değişikliği yapmak,
+push/deploy etmek anlamına gelmez; "deploy et", "github'a gönder" gibi açık bir
+talimat yoksa kod yalnızca yerelde kalır ve push/deploy/commit adımı kullanıcıya
+bırakılır. Bir oturumda verilen izin sonraki oturumlara ya da başka bir işleme
+GENİŞLEMEZ. Kısıtlar:
+
+- **`clasp pull` YALNIZCA git değişiklikleri `git stash` ile kenara alındıktan sonra
+  kullanılabilir.** Çünkü `clasp pull` yerel dosyaları uzaktaki sürümle ÜZERİNE YAZAR;
+  stash'lenmemiş commit edilmemiş değişiklikler kalıcı olarak kaybolabilir. Uzak
+  durumu yalnızca doğrulamak için pull gerekiyorsa boş bir geçici dizinde (kopyalanmış
+  `.clasp.json` ile) çalıştırmak çok daha güvenlidir.
+- **Git komutları geçmişi/durumu OKUMAK için serbesttir** (`git log`, `git status`,
+  `git diff`, `git show`, `git blame`, `git remote -v`, `git branch` vb.). Depoyu
+  DEĞİŞTİREN komutlar (add, commit, push, rm, mv, reset, checkout/switch ile dosya
+  değiştirme, stash dahil, rebase, merge) yalnızca geliştirici açıkça isterse çalışır.
+- Salt-okunur clasp komutları (`clasp show-authorized-user`, `clasp list-deployments`,
+  `clasp list-versions`) durum kontrolü için kullanılabilir; yayın etkisi olan her şey
+  (push, deploy/create-deployment, create-version, login/logout) yine yalnızca açık
+  istekle.
+
+**Deploy açıklaması (kullanıcı kuralı, 2026-10-12):** bir agentic çalışmanın
+sonucunda yöneticinin isteğiyle deploy yapılırken `deploy.ps1 -Aciklama "..."`
+mutlaka yapılan işin KELİMESEL ÖZETİYLE (en fazla 200 karakter) verilir; boş
+bırakılmaz. Google, Apps Script API'sinde dağıtım `description` alanı için bir
+üst sınır yayımlamıyor (resmi `DeploymentConfig` referansında yalnızca "The
+description for this deployment." yazıyor; sınırı denemek canlı dağıtıma yeni
+versiyon bastığı için denenmedi) — 200 karakter bu yüzden kullanıcı kararıyla
+seçilmiş okunabilirlik sınırıdır ve betik fazlasını `...` ile kırpar.
+
+## Hafıza (memory) bootstrap — başka bilgisayar / yeni oturum için
+
+Claude'un kalıcı hafızası (`~/.claude/projects/<proje-yolu-slug>/memory/`) **makineye
+özeldir**; repoyla birlikte taşınmaz, bu CLAUDE.md taşınır. Bu yüzden: **her agentic
+çalışma başlarken, oturumun hafıza dizininde aşağıdaki dosyalar (ada göre) yoksa
+Claude bunları AŞAĞIDAKİ içerikle oluşturur ve `MEMORY.md` indeksine tek satırlık
+işaretçi ekler; varsa içeriği aşağıdakiyle karşılaştırıp eskiyse günceller.** Bu
+kural kullanıcının açık isteğidir (2026-10-12): başka bir bilgisayarda çalışıldığında
+o cihazın hafızasına da bu önemli bilgiler kaydedilsin. Bu bloğu değiştiren her
+karar burada da güncellenmeli (kanonik kopya: `gider-isleyici/CLAUDE.md`;
+`Fitness/CLAUDE.md` aynı bloğun kopyasını taşır).
+
+Yalnızca repoda zaten yazılı olmayan, kullanıcıya özgü kurallar hafızaya alınır
+(kod yapısı/geçmiş bilgisi CLAUDE.md'dedir, hafızaya KOPYALANMAZ).
+
+**1) `yayin-islemleri-sadece-acik-istekle.md`** (type: feedback)
+
+```markdown
+---
+name: yayin-islemleri-sadece-acik-istekle
+description: clasp (push/deploy/pull) ve git push/commit gibi yayın işlemleri yalnızca geliştirici açıkça isterse; clasp pull öncesi stash; git okuma serbest; deploy açıklaması ≤200 karakter özet
+metadata:
+  type: feedback
+---
+
+Geliştirici açıkça belirtmedikçe `clasp` ile push/deploy yapma ve GitHub'a push/commit gönderme. Git komutları geçmişi/durumu okumak için serbest (log, status, diff, show). `clasp pull` yerel kodu ezdiği için yalnızca git değişiklikleri stash edildikten sonra (ya da boş geçici dizinde) kullanılır. Deploy yapıldığında açıklama, yapılan işin kelimesel özeti olacak şekilde en fazla 200 karakter verilir.
+
+**Why:** Kullanıcı kodun canlıya gitmesini ve repo geçmişini kendi kontrolünde tutmak istiyor; `clasp pull` commit edilmemiş işi sessizce silebilir. Bir oturumdaki izin diğerlerine geçmez.
+
+**How to apply:** Kod değişikliğini yerelde bırak, "deploy et / github'a gönder" gibi açık bir talimat gelmeden push/deploy/commit çalıştırma. Deploy gerekince `gider-isleyici/deploy.ps1 -Aciklama "<özet>"` kullan. Kurallar iki projenin CLAUDE.md dosyasında da yazılı. İlgili: [[gider-isleyici-deploy-akisi]], [[tasarim-tercihleri]].
+```
+
+**2) `gider-isleyici-deploy-akisi.md`** (type: reference)
+
+```markdown
+---
+name: gider-isleyici-deploy-akisi
+description: gider-isleyici deploy betiği (deploy.ps1), mevcut dağıtımı güncelleme kuralı, UTF-8 BOM uyarısı; Fitness'te yalnız @HEAD var
+metadata:
+  type: reference
+---
+
+gider-isleyici canlı Web App'i tek bir versiyonlu dağıtımdır (ID CLAUDE.md'de; webhook bu /exec URL'ine kayıtlı). Yeni dağıtım OLUŞTURULMAZ, hep aynı ID'ye yeni versiyon basılır: `powershell -File .\deploy.ps1 -Aciklama "<≤200 karakter özet>"` (login kontrolü, en yüksek @N dağıtımı bulma, clasp push + deploy -i). `deploy.ps1` UTF-8 BOM ile kaydedilmeli (Windows PowerShell 5.1 aksi halde Türkçe karakterleri bozar). Dağıtım açıklaması "/" ile başlamamalı (Git Bash yol çevirisi). Fitness projesinde yalnız @HEAD dağıtımı var, tetikleyiciler onu çalıştırır; orada yalnız `clasp push` gerekir. Bunların hepsi yalnızca geliştirici açıkça isterse çalıştırılır: [[yayin-islemleri-sadece-acik-istekle]].
+```
+
+**3) `tasarim-tercihleri.md`** (type: feedback)
+
+```markdown
+---
+name: tasarim-tercihleri
+description: Kullanıcının kod tasarım tercihleri - komut tabanlı spor girişi, regex/büyük-küçük harf mantığından kaçınma, periyodik trigger istememe, log'ları Telegram'a dökmeme
+metadata:
+  type: feedback
+---
+
+Spor modülü elle yazılan metni yorumlamaz; her şey tıklanabilir komutlarla (`/spor_<gun>_off`, `/spor_<gun>_<blok>`) ve `/spornotu` ile yapılır. Gereksiz karmaşık regex ve büyük/küçük harf (lowercase) normalizasyonu istenmez; sadece gerekli yerde, mümkünse `startsWith`/`===` ile eşleştir. Gider-isleyici'ye sürekli/periyodik trigger EKLEME (yalnızca olay sonucu kurulan tek seferlik trigger'lar, sızıntıya karşı handler adına göre temizlik zorunlu). Logları Telegram'a dökme önerisi reddedildi, tekrar önerme. Yeni bir kullanıcıya dönük davranış (süre, bildirim vb.) konusunda varsayılanı kendin seçmek yerine seçenekleri sor.
+
+**Why:** Kullanıcı basit, öngörülebilir ve hataya kapalı akışları tercih ediyor; elle yazılan metin hata kaynağıydı, periyodik trigger kota ve karmaşıklık getirir.
+
+**How to apply:** Yeni özellik tasarlarken önce komut/buton tabanlı çözümü, sonra sıkı ve basit eşleşmeyi düşün; trigger gerekiyorsa tek seferlik ve kendini silen olsun. İlgili: [[yayin-islemleri-sadece-acik-istekle]].
+```
 
 ## CLAUDE.md bakım disiplini
 
-Her agentic çalışma **başlamadan önce** bu dosyadaki kuralları kontrol eder.
+Her agentic çalışma **başlamadan önce** bu dosyadaki kuralları kontrol eder ve
+hafıza dizininde "Hafıza (memory) bootstrap" bölümündeki dosyaların bulunduğunu doğrular
+(eksikse oluşturur).
 Her agentic çalışma **bitiminde**, yapılan işleri ve alınan kararları bir
 sonraki oturumun buradan doğrudan öğrenebileceği şekilde bu dosyaya işler
 (yeni bölüm ekler, "Sonraki oturum için açık sorular" bölümünü günceller,
@@ -1419,13 +1507,21 @@ yeni kullanım metni.
 
 ## Sonraki oturum için açık sorular
 
-- **DEPLOY BEKLİYOR (2026-10-12): spor komut dili + `/spornotu`.** Kod hazır ve mock
-  harness'larla doğrulandı (bkz. "Spor modülü yalnızca komutlarla çalışır" bölümü) ama
-  HENÜZ push/deploy EDİLMEDİ ve gerçek Telegram/Gemini testi yapılmadı. Kullanıcı:
-  Fitness `clasp push`; gider-isleyici `clasp push` + AYNI deployment ID'ye `clasp
-  deploy -i`; editörden `kurulumKomutlar()` bir kez; `script.scriptapp` yetkisi zaten
-  retry için onaylı (yeni onay ekranı çıkmamalı). Bekleyen gerçek-ortam doğrulaması o
-  bölümün sonundaki listededir.
+- **DEPLOY YAPILDI (2026-10-12): spor komut dili + `/spornotu`.** GitHub'a gönderildi
+  (gider-isleyici `06b0f9a`, Fitness `23de4e5`). Webhook'a bağlı dağıtım `AKfycbxf7f…qBPZqmBdmqQ`
+  **@21**'e güncellendi (`deploy.ps1` ile; uzaktan `clasp pull` ile SporNot.js ve yeni
+  Telegram.js doğrulandı); Fitness `clasp push` yapıldı (yalnız @HEAD dağıtımı var, yeni
+  dağıtım oluşturulmadı). Hâlâ yapılacak: editörden `kurulumKomutlar()` bir kez + gerçek
+  Telegram/Gemini testi (bkz. "Spor modülü yalnızca komutlarla çalışır" bölümü sonu).
+- **`deploy.ps1` (gider-isleyici kökü):** login kontrolü (oturum yoksa `clasp login`),
+  en yüksek `@N` versiyonlu dağıtımı bulur (`@HEAD` hariç; yoksa yeni dağıtım
+  OLUŞTURMADAN durur), `clasp push` + `clasp deploy -i <id>` yapar, sonucu listeler.
+  Kullanım: `powershell -File .\deploy.ps1 -Aciklama "<özet>"` (opsiyonel
+  `-DeploymentId`). `-Aciklama` ≤200 karakter, boşsa tarih + son commit başlığı
+  kullanılır (bkz. "Deploy açıklaması" kuralı, en üstte).
+  **Dosya UTF-8 BOM ile kaydedilmeli:** Windows PowerShell 5.1 BOM'suz dosyayı ANSI
+  okuyup Türkçe karakterleri bozar (doğrulandı: `ü` → `Ǭ`); editör/araç BOM'u
+  silerse yeniden eklenmeli. Not: bu betik Fitness için GEREKMEZ.
 
 - **DEPLOY DURUMU (2026-10-05, kullanıcının açık isteğiyle yapıldı):** `clasp
   push` + `clasp deploy -i AKfycbxf7f…qBPZqmBdmqQ` ile webhook'a bağlı
