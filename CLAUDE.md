@@ -35,6 +35,11 @@ GENİŞLEMEZ. Kısıtlar:
   (push, deploy/create-deployment, create-version, login/logout) yine yalnızca açık
   istekle.
 
+- **Ajan teşhis istisnası (2026-10-12):** `clasp run-function` YALNIZCA adı `teshis` ile
+  başlayan salt-okunur fonksiyonlar için serbesttir (`Teshis.js`, bkz. "Retry hatası kök
+  sebebi + ajan teşhis fonksiyonları"). Başka hiçbir fonksiyon uzaktan çalıştırılmaz —
+  veri silme/yazma kabul edilemez.
+
 **Deploy açıklaması (kullanıcı kuralı, 2026-10-12):** bir agentic çalışmanın
 sonucunda yöneticinin isteğiyle deploy yapılırken `deploy.ps1 -Aciklama "..."`
 mutlaka yapılan işin KELİMESEL ÖZETİYLE (en fazla 200 karakter) verilir; boş
@@ -64,12 +69,12 @@ Yalnızca repoda zaten yazılı olmayan, kullanıcıya özgü kurallar hafızaya
 ```markdown
 ---
 name: yayin-islemleri-sadece-acik-istekle
-description: clasp (push/deploy/pull) ve git push/commit gibi yayın işlemleri yalnızca geliştirici açıkça isterse; clasp pull öncesi stash; git okuma serbest; deploy açıklaması ≤200 karakter özet
+description: clasp (push/deploy/pull) ve git push/commit gibi yayın işlemleri yalnızca geliştirici açıkça isterse; clasp pull öncesi stash; git okuma serbest; deploy açıklaması ≤200 karakter özet; clasp run-function yalnızca teshis* (salt-okunur)
 metadata:
   type: feedback
 ---
 
-Geliştirici açıkça belirtmedikçe `clasp` ile push/deploy yapma ve GitHub'a push/commit gönderme. Git komutları geçmişi/durumu okumak için serbest (log, status, diff, show). `clasp pull` yerel kodu ezdiği için yalnızca git değişiklikleri stash edildikten sonra (ya da boş geçici dizinde) kullanılır. Deploy yapıldığında açıklama, yapılan işin kelimesel özeti olacak şekilde en fazla 200 karakter verilir.
+Geliştirici açıkça belirtmedikçe `clasp` ile push/deploy yapma ve GitHub'a push/commit gönderme. Git komutları geçmişi/durumu okumak için serbest (log, status, diff, show). `clasp pull` yerel kodu ezdiği için yalnızca git değişiklikleri stash edildikten sonra (ya da boş geçici dizinde) kullanılır. Deploy yapıldığında açıklama, yapılan işin kelimesel özeti olacak şekilde en fazla 200 karakter verilir. Salt-okunur teşhis için tek istisna: `clasp run-function` yalnızca adı `teshis` ile başlayan fonksiyonlar için (gider-isleyici/Teshis.js); bunun dışında hiçbir fonksiyon uzaktan çalıştırılmaz (veri silme/yazma kabul edilemez).
 
 **Why:** Kullanıcı kodun canlıya gitmesini ve repo geçmişini kendi kontrolünde tutmak istiyor; `clasp pull` commit edilmemiş işi sessizce silebilir. Bir oturumdaki izin diğerlerine geçmez.
 
@@ -1505,7 +1510,117 @@ ağrıdı")` → `dun`; çıplak `/spornotu` → bilgilendirme, 10 dk sonra "sü
 bildirimi ve Triggers listesinde `sporNotBeklemeSuresiDoldu` kalmaması; `/spor` →
 yeni kullanım metni.
 
+## Retry hatası kök sebebi + ajan teşhis fonksiyonları (2026-10-12)
+
+**Belirti:** LLM yoğunken mesaj BEKLIYOR'a düşüyor, 10 dk sonra işlenmiyor, satır
+BEKLIYOR kalıyor ve ~1 gün sonra (bir sonraki mesajda, takılı-satır bakımıyla)
+PES_EDILDI oluyor ("Otomatik tekrar deneme zamanında tetiklenmedi."). 2026-10-05'te
+aynı belirti "olası sweep yarışı" diye yorumlanmıştı; asıl sebep deterministik çıktı.
+
+**Kök sebep (K1, mock testle doğrulandı):** `retry/RetryCore.js >
+yenidenDenemeKuyruguEkle_` yeni trigger'ı kurup kilit alınca `bakimYap_`
+çalıştırıyordu; bakımın `sahipsizTetikleyicileriTemizle_` adımı, henüz hiçbir
+BEKLIYOR satır o trigger'ı göstermediği için YENİ trigger'ı "sahipsiz" sayıp
+siliyordu → satır BEKLIYOR + ölü `trigger_id` ile yazılıyordu. Tek execution'da,
+yarış olmadan, her ilk denemede oluyordu. Sweep 2026-09-29'da eklenmişti; o
+tarihten beri ilk-aşama retry fiilen çalışmıyordu. Test deseni: olay sırası
+`trigger kuruldu → sahipsiz-trigger-temizlendi → trigger silindi`.
+
+**Düzeltme:** `yenidenDenemeKuyruguEkle_` içindeki `bakimYap_` çağrısı kaldırıldı
+(zaten aynı doPost'ta `kuyrugaEkle_ > bakimYapKilitli_` trigger'dan ÖNCE çalışıyor).
+**DERS (gevşetilmemeli): bir trigger kurulduktan sonra, satıra yazılmadan önce
+sahipsiz-trigger taraması (ya da onu çağıran `bakimYap_`) çalıştırılmamalı.**
+İkinci küçük düzeltme: `takiliBekleyenleriPesEt_` artık `ISLENIYOR` + 15 dk'dan eski
+`son_deneme_zamani` satırlarını da PES_EDILDI'ye düşürür ("yarıda kaldı") — eskiden
+ISLENIYOR'da kalan satır sonsuza dek görünmezdi.
+
+**Bilinçli yapılmayanlar (tek kullanıcılı kişisel bot, kullanıcı kararı —
+karmaşıklık artmasın):** handler'da LLM sonrası yazımlar için kilitli
+"update_id ile satırı yeniden bul" (FIFO `deleteRows` sırasında eski `satirNo` ile
+yanlış satıra yazma riski mock testle görüldü, saniyelik pencere), handler'da trigger
+kurma-yazma arası kilit (sweep yarışı), kilit alınamayınca yedek trigger, otomatik
+yeniden kurma sayacı, Telegram gönderim hatasında mükerrer harcama önlemi
+(`mesajiIsleVeYanitla_` başarılı + `sendTelegramMessage_` hata → aşama ertelenir →
+aynı harcama tekrar yazılır). Tekrarlanırsa ayrı ele alınır.
+
+### Ajan teşhis fonksiyonları (`Teshis.js`) — SALT-OKUNUR
+
+Ajan, sorun tespiti için aşağıdaki fonksiyonları `clasp run-function <ad> [-p
+'[args]']` ile çalıştırabilir (ya da kullanıcı Apps Script editöründen çalıştırıp
+çıktıyı yapıştırır). Hepsi JSON nesnesi döner ve `console.log` ile de basar
+(Logger kullanılmaz — kullanıcı kararı).
+
+| Fonksiyon | Ne verir |
+| --- | --- |
+| `teshisRapor()` | Ana rapor: kuyruk durum sayacı + son 10 mesaj, trigger listesi, tutarlılık bulguları, spor-not bekleme, ayarların "tanımlı mı" bayrakları |
+| `teshisMesajlar(n)` | Kuyruğun son n (varsayılan 30, en çok 100) satırı; metin ≤100 karakter |
+| `teshisRetry()` | durumu dolu tüm retry satırları (aşama, vade, hata, trigger_id) + durum sayacı |
+| `teshisTriggerlar()` | Projedeki tüm trigger'lar (handler, uid, tip, kaynak) |
+| `teshisTutarlilik()` | Çapraz kontroller (aşağıdaki bulgu kodları) |
+| `teshisWebhook()` | Telegram `getWebhookInfo` (GET): url'nin yalnız son 8 karakteri, bekleyen update, son hata, `WEBAPP_URL` ile eşleşme |
+| `teshisHarcamalar(n)` | Harcama tablosunun son n satırı (D:I) + muhtemel mükerrer adayları |
+
+**Bulgu kodları (`teshisTutarlilik`):** T-01 BEKLIYOR satırın trigger'ı yok/silinmiş
+(ölü trigger — yukarıdaki K1 belirtisi) · T-02 hiçbir BEKLIYOR satırın göstermediği
+retry trigger'ı (sahipsiz) · T-03 vadesi 15 dk+ geçmiş BEKLIYOR (takılı) · T-04 15 dk+
+ISLENIYOR · T-05 PES_EDILDI adedi/yaşı · T-06 aynı update_id birden çok satırda ·
+T-07 spor-notu bekleme/trigger tutarsızlığı (süresi dolmuş kayıt, >1 trigger, kayıt
+yokken trigger) · T-08 toplam trigger ≥15 (kota ≈20) · T-09 kuyruk kolon sayısı ≠
+beklenen · T-10 (bilgi) SON_UPDATE_ID ↔ kuyruktaki en büyük update_id · T-11 (bilgi)
+BEKLIYOR sayısı ≠ retry trigger sayısı. Seviyeler: HATA / UYARI / BILGI.
+
+**Salt-okunur güvence (silme/yazma ASLA):**
+- `Teshis.js` yalnızca okuma API'leri kullanır (sheet'e `getSheetByName` ile erişir —
+  `getOrCreateQueueSheet_` sekmeyi oluşturup genişletebildiği için KULLANILMAZ —
+  `getValues`, `getProperty`, `getProjectTriggers`, Telegram GET). Yazma/silme/ekleme,
+  mesaj gönderme, kilit alma, POST yok. Çıktıya sır yazılmaz (token/API anahtarı/
+  Script Property değerleri yok, yalnız "tanımlı mı").
+- Kontrol: scratchpad'te (commit edilmeyen) mock harness `Teshis.js` kaynağında
+  yasak jetonları (setValue, appendRow, delete*, setProperty, newTrigger,
+  deleteTrigger, sendMessage, LockService, Logger, "post" …) tarar ve her `teshis*`
+  fonksiyonunu yazma-casuslu ortamda çalıştırıp SIFIR yazma doğrular (64 kontrol
+  PASS). `Teshis.js` değişirse bu kontrol yeniden yapılmalı.
+- **AJAN KURALI:** `clasp run-function` YALNIZCA adı `teshis` ile başlayan
+  fonksiyonlar için kullanılır. Başka hiçbir fonksiyon uzaktan çalıştırılmaz
+  (harcamaEkle, sonHarcamalari*, kurulumWebhook/webhookSil, kurulumKomutlar, doPost,
+  retry handler/komut backend'leri, LLM test fonksiyonları; Fitness'te de
+  `yeniTelegramMesajlariniGetir_` gibi imleç değiştirenler dahil) — veri silme/
+  yazma kabul edilemez. Bu, "clasp yalnızca açık istekle" kuralına tanınan TEK
+  istisnadır; push/deploy/login yine yalnızca açık istekle. (`_` ile biten iç
+  fonksiyonlar API'den zaten çalıştırılamıyor: "Unable to run script function".)
+
+**`clasp run-function` durumu:** 2026-10-12'de `webhookDurumu` vb. public fonksiyonlar
+`We're sorry, a server error occurred while reading from storage. Error code
+NOT_FOUND` verdi (≈ `StorageExecutableService.GetExecutable NOT_FOUND`: script'in
+API'den çalıştırılabilir "executable"ı yok); `clasp list-apis` projede GCP kimliği
+olmadığını söyledi. Bunun için `appsscript.json`'a `"executionApi": {"access":
+"MYSELF"}` eklendi (additive, Web App'i etkilemez). **`oauthScopes` EKLENMEZ** — açık
+kapsam listesi otomatik algılamayı kapatıp canlı Web App'i bozabilir. Bu değişiklik
+ve `Teshis.js` canlıda ancak `clasp push` sonrası görünür (`run-function` en son
+kaydedilmiş HEAD'i çalıştırır). **İlk deneme (push sonrası):** `clasp run-function
+teshisTriggerlar`. Hâlâ NOT_FOUND ise sırayla kullanıcıyla konuşulacak seçenekler:
+(1) ayrı bir API-executable dağıtımı (Web App dağıtımına dokunmaz), (2) projeye
+standart GCP bağlamak (ayrıca `clasp tail-logs` ile bugün göremediğimiz Cloud log'ları
+açar). Ajan bunları kendi başına yapmaz. Son çare: kullanıcı editörden çalıştırıp
+çıktıyı yapıştırır.
+
 ## Sonraki oturum için açık sorular
+
+- **[GEÇİCİ NOT — iş bitince SİL] `clasp run-function` kurulumu bekliyor:** `clasp run teshisRapor`
+  şu an "Unable to run script function" veriyor (Teshis.js + executionApi uzakta mevcut; büyük olasılıkla
+  token kapsamları/GCP). Kullanıcı standart GCP projesi bağlayınca: Apps Script API'yi aç → OAuth "Desktop"
+  istemcisi indir (`creds.json`, repo DIŞINDA) → editörde Project Settings > GCP Project'e proje numarasını gir
+  (sonra editörden bir fonksiyon çalıştırıp izinleri yenile, botun çalıştığını doğrula) → `appsscript.json`'a
+  `oauthScopes`: spreadsheets, script.external_request, script.scriptapp ekle (kod başka servis kullanmıyor;
+  canlı Web App'i bozmadığı doğrulanmadan deploy etme) → `clasp login --creds creds.json --use-project-scopes`
+  → `clasp run-function teshisTriggerlar`. Çalışırsa bu notu kaldır ve "clasp run-function durumu" bölümünü güncelle.
+
+- **PUSH/DEPLOY BEKLİYOR (2026-10-12): retry düzeltmesi + `Teshis.js` + `executionApi`.**
+  Kod hazır, mock harness'larla doğrulandı (64+56+71 kontrol PASS) ama yayında değil. Kullanıcı
+  isterse: `clasp push` (Teshis.js + appsscript.json + RetryCore.js) → `deploy.ps1 -Aciklama "<özet>"`
+  (webhook dağıtımına yeni versiyon) → ajan `clasp run-function teshisTriggerlar` ile `run`
+  uygulanabilirliğini dener. Gerçek doğrulama: LLM modelini geçici bozup mesaj at → Triggers
+  listesinde `zamanlanmisTekrarDenemeyiIsle` 10 dk durmalı, `teshisTutarlilik()` T-01 vermemeli.
 
 - **DEPLOY YAPILDI (2026-10-12): spor komut dili + `/spornotu`.** GitHub'a gönderildi
   (gider-isleyici `06b0f9a`, Fitness `23de4e5`). Webhook'a bağlı dağıtım `AKfycbxf7f…qBPZqmBdmqQ`

@@ -463,13 +463,16 @@ function bakimYapKilitli_(sheet) {
 function takiliBekleyenleriPesEt_(sheet, simdi) {
   var donusenler = [];
   kuyrukTumSatirlariOku_(sheet).forEach(function (row) {
-    if (row.durum !== RETRY_DURUM.BEKLIYOR) {
+    var isleniyorMu = row.durum === RETRY_DURUM.ISLENIYOR;
+    if (row.durum !== RETRY_DURUM.BEKLIYOR && !isleniyorMu) {
       return;
     }
+    // BEKLIYOR: vade (sonraki_deneme_zamani) referans alınır. ISLENIYOR: handler'ın
+    // claim ettiği an (son_deneme_zamani); execution claim sonrası ölürse satır
+    // sonsuza dek ISLENIYOR'da görünmez kalırdı (2026-10-12).
+    var referans = isleniyorMu ? row.sonDenemeZamani : row.sonrakiDenemeZamani;
     var sonrakiMs =
-      row.sonrakiDenemeZamani instanceof Date
-        ? row.sonrakiDenemeZamani.getTime()
-        : new Date(row.sonrakiDenemeZamani).getTime();
+      referans instanceof Date ? referans.getTime() : new Date(referans).getTime();
     if (isNaN(sonrakiMs) || sonrakiMs + RETRY_TAKILI_ESIK_MS >= simdi.getTime()) {
       return;
     }
@@ -478,7 +481,9 @@ function takiliBekleyenleriPesEt_(sheet, simdi) {
     } catch (err) {
       logHata_("yenidenDeneme.takili-trigger-silinemedi", err);
     }
-    var hata = "Otomatik tekrar deneme zamanında tetiklenmedi.";
+    var hata = isleniyorMu
+      ? "Otomatik tekrar deneme işlemi yarıda kaldı."
+      : "Otomatik tekrar deneme zamanında tetiklenmedi.";
     satiriPesEdildiOlarakIsaretle_(sheet, row, hata, simdi);
     log_("yenidenDeneme.takili-pes-edildi", {
       updateId: row.updateId,
@@ -672,7 +677,12 @@ function yenidenDenemeKuyruguEkle_(
     try {
       var sheet = getOrCreateQueueSheet_();
       var simdi = new Date();
-      bakimYap_(sheet, simdi);
+      // ⚠️ BURADA bakimYap_ ÇAĞRILMAZ (2026-10-12 hata düzeltmesi): yukarıda
+      // kurulan trigger henüz hiçbir BEKLIYOR satırın trigger_id'sinde yok;
+      // bakımın sahipsiz-trigger taraması onu "sahipsiz" sayıp SİLİYORDU ve
+      // satır ölü bir trigger_id ile BEKLIYOR'da takılı kalıyordu. Bakım zaten
+      // aynı doPost'ta, trigger kurulmadan ÖNCE (kuyrugaEkle_ > bakimYapKilitli_)
+      // çalıştı. Trigger kurulduktan sonra sweep çalıştıran kod eklenmemeli.
 
       var sonrakiDenemeZamani = new Date(simdi.getTime() + gecikmeDakika * 60 * 1000);
 
