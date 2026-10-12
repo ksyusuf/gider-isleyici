@@ -1615,13 +1615,11 @@ açar). Ajan bunları kendi başına yapmaz. Son çare: kullanıcı editörden �
   canlı Web App'i bozmadığı doğrulanmadan deploy etme) → `clasp login --creds creds.json --use-project-scopes`
   → `clasp run-function teshisTriggerlar`. Çalışırsa bu notu kaldır ve "clasp run-function durumu" bölümünü güncelle.
 
-- **PUSH/DEPLOY BEKLİYOR (2026-10-12): retry düzeltmesi + `Teshis.js` + `executionApi`.**
-  Kod hazır, mock harness'larla doğrulandı (64+56+71 kontrol PASS) ama yayında değil. Kullanıcı
-  isterse: `clasp push` (Teshis.js + appsscript.json + RetryCore.js) → `deploy.ps1 -Aciklama "<özet>"`
-  (webhook dağıtımına yeni versiyon) → ajan `clasp run-function teshisTriggerlar` ile `run`
-  uygulanabilirliğini dener. Gerçek doğrulama: LLM modelini geçici bozup mesaj at → Triggers
-  listesinde `zamanlanmisTekrarDenemeyiIsle` 10 dk durmalı, `teshisTutarlilik()` T-01 vermemeli.
-
+- **DEPLOY YAPILDI (2026-10-12): retry düzeltmesi + `Teshis.js` + `executionApi`.** GitHub: gider-isleyici
+  `0e35489`, Fitness `bf44826`. Webhook dağıtımı `AKfycbxf7f…` **@22** (`deploy.ps1`). Henüz gerçek-ortam
+  doğrulaması YAPILMADI: LLM modelini geçici bozup mesaj at → Triggers listesinde
+  `zamanlanmisTekrarDenemeyiIsle` 10 dk durmalı, `teshisTutarlilik()` T-01 vermemeli. `clasp run` GCP
+  kurulumunu bekliyor (yukarıdaki geçici not).
 - **DEPLOY YAPILDI (2026-10-12): spor komut dili + `/spornotu`.** GitHub'a gönderildi
   (gider-isleyici `06b0f9a`, Fitness `23de4e5`). Webhook'a bağlı dağıtım `AKfycbxf7f…qBPZqmBdmqQ`
   **@21**'e güncellendi (`deploy.ps1` ile; uzaktan `clasp pull` ile SporNot.js ve yeni
